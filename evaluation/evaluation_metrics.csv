@@ -1,0 +1,2 @@
+model,dataset_rows,train_rows,validation_rows,test_rows,rouge1,rouge2,rougeL,bleu,bertscore_precision,bertscore_recall,bertscore_f1
+google/flan-t5-base,1442,1153,144,145,0.5482675460752072,0.3082414916171251,0.45320380039638586,28.696002047705473,0.9231403897548544,0.9159870949284784,0.919512035517857

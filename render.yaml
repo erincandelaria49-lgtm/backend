@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: devpath-api
+    env: python
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: APP_ENV
+        value: production
+      - key: FRONTEND_URL
+        sync: false
+      - key: BACKEND_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSLMODE
+        value: require
+      - key: JWT_ISSUER
+        value: devpath
+      - key: JWT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_REDIRECT_URI
+        sync: false
+      - key: ADMIN_LOGIN_USERNAME
+        sync: false
+      - key: ADMIN_LOGIN_PASSWORD
+        sync: false
+      - key: FACULTY_LOGIN_USERNAME
+        sync: false
+      - key: FACULTY_LOGIN_PASSWORD
+        sync: false
+      - key: USE_LLM_REFINER
+        value: "false"
+      - key: FLAN_T5_MODEL
+        value: google/flan-t5-base
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
