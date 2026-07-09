@@ -16,6 +16,10 @@ from app.routers import login_analytics
 logger = logging.getLogger(__name__)
 
 
+def _should_run_runtime_schema_init() -> bool:
+    return os.getenv("RUN_RUNTIME_SCHEMA_INIT", "").strip().lower() == "true"
+
+
 def _ensure_certificate_record_columns():
     try:
         inspector = inspect(engine)
@@ -104,6 +108,9 @@ app.include_router(login_analytics.router)
 
 @app.on_event("startup")
 def startup_event():
+    if settings.app_env.strip().lower() == "production" and not _should_run_runtime_schema_init():
+        logger.info("Skipping runtime schema initialization during startup in production.")
+        return
     _ensure_runtime_schema()
 
 
