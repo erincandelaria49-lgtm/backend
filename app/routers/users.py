@@ -108,7 +108,6 @@ from app.services.learning_path import (
     identify_skill_gaps,
     generate_personalized_learning_path,
 )
-from app.services.collaborative_filter import get_peer_recommendations
 from app.services.engagement_service import refresh_engagement, compute_engagement_score, calculate_learning_progress
 from app.models import EngagementCommit, XpHistory
 from app.services.engagement_service import week_start_for_date
@@ -2114,6 +2113,8 @@ def get_rule_recommendations(username: str, db: Session = Depends(get_db)):
             )
         )
     db.commit()
+
+    from app.services.collaborative_filter import get_peer_recommendations
 
     peer_recommendations = get_peer_recommendations(db, username)
 
