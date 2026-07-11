@@ -135,6 +135,14 @@ class RegistrationIn(BaseModel):
     target_certifications: list[str] | None = None
 
 
+class LeaderboardBadgeOut(BaseModel):
+    label: str
+    rarity: str
+    medal_icon: str | None = None
+    achieved: bool = False
+    claimed: bool = False
+
+
 class LeaderboardEntryOut(BaseModel):
     id: int
     username: str
@@ -146,6 +154,8 @@ class LeaderboardEntryOut(BaseModel):
     runway_xp: int
     runway_remaining_xp: int
     delta: str
+    badge_count: int = 0
+    badge_stack: list[LeaderboardBadgeOut] = Field(default_factory=list)
 
 
 class AdminStudentSummary(BaseModel):

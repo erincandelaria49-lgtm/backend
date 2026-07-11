@@ -35,6 +35,7 @@ from app.schemas import (
     PortfolioSettingsIn,
     UserResponse,
     RegistrationIn,
+    LeaderboardBadgeOut,
     LeaderboardEntryOut,
     LearningPathResponse,
     ProjectLearningPathResponse,
@@ -743,6 +744,16 @@ def logout(current_user: User = Depends(get_current_user), db: Session = Depends
 
 def _badge_bonus_xp(badges: list[Badge]) -> int:
     return sum(badge_reward_xp(item.rarity) for item in badges if item.claimed)
+
+
+def _badge_rank_weight(badge: Badge) -> tuple[int, int, int, str]:
+    rarity_order = {"legendary": 5, "epic": 4, "rare": 3, "uncommon": 2, "common": 1}
+    return (
+        1 if badge.claimed else 0,
+        1 if badge.achieved else 0,
+        rarity_order.get(str(badge.rarity or "").lower(), 0),
+        str(badge.label or "").lower(),
+    )
 
 
 def _badge_payload(item: Badge) -> dict:
@@ -1768,7 +1779,7 @@ def _fallback_portfolio_summary(
 @router.get("/leaderboard", response_model=list[LeaderboardEntryOut])
 def get_leaderboard(db: Session = Depends(get_db)):
     users = db.query(User).filter(User.role == "student").all()
-    entries: list[LeaderboardEntryOut] = []
+    entry_rows: list[tuple[LeaderboardEntryOut, list[Badge]]] = []
     current_week = week_start_for_date(dt.datetime.utcnow())
     last_week = current_week - dt.timedelta(weeks=1)
     for user in users:
@@ -1792,21 +1803,41 @@ def get_leaderboard(db: Session = Depends(get_db)):
             .scalar()
         )
         delta = int(weekly_xp or 0) - int(last_week_xp or 0)
-        entries.append(
-            LeaderboardEntryOut(
-                id=user.id,
-                username=user.username,
-                avatar_url=user.avatar_url,
-                program=user.program,
-                year_level=user.year_level,
-                level=level,
-                xp=total_xp,
-                runway_xp=total_xp,
-                runway_remaining_xp=runway_remaining_xp,
-                delta=f"{'+' if delta >= 0 else ''}{delta} XP",
+        entry_rows.append(
+            (
+                LeaderboardEntryOut(
+                    id=user.id,
+                    username=user.username,
+                    avatar_url=user.avatar_url,
+                    program=user.program,
+                    year_level=user.year_level,
+                    level=level,
+                    xp=total_xp,
+                    runway_xp=total_xp,
+                    runway_remaining_xp=runway_remaining_xp,
+                    delta=f"{'+' if delta >= 0 else ''}{delta} XP",
+                    badge_count=len(badge_rows),
+                ),
+                badge_rows,
             )
         )
-    entries.sort(key=lambda entry: entry.xp, reverse=True)
+    entry_rows.sort(key=lambda item: item[0].xp, reverse=True)
+    entries: list[LeaderboardEntryOut] = []
+    badge_limits = [7, 5, 4]
+    for index, (entry, badge_rows) in enumerate(entry_rows):
+        badge_stack_limit = badge_limits[index] if index < len(badge_limits) else 4
+        badge_rows_sorted = sorted(badge_rows, key=_badge_rank_weight, reverse=True)
+        entry.badge_stack = [
+            LeaderboardBadgeOut(
+                label=item["label"],
+                rarity=item["rarity"],
+                medal_icon=item.get("medal_icon"),
+                achieved=bool(item["achieved"]),
+                claimed=bool(item["claimed"]),
+            )
+            for item in [_badge_payload(row) for row in badge_rows_sorted[:badge_stack_limit]]
+        ]
+        entries.append(entry)
     return entries
 
 
