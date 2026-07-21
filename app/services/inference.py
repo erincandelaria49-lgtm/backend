@@ -131,6 +131,10 @@ def infer_practice_and_careers(repos: list[dict]) -> dict:
         return _fallback_practice_and_careers(repos)
 
 
+def infer_practice_and_careers_fast(repos: list[dict]) -> dict:
+    return _fallback_practice_and_careers(repos)
+
+
 def _model_signal_summary(practice_dimensions: list[dict] | None) -> str:
     dimensions = practice_dimensions or []
     if not dimensions:

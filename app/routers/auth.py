@@ -20,7 +20,7 @@ from app.services.github import (
     summarize_repo,
 )
 from app.services.gamification import compute_xp_and_badges
-from app.services.inference import infer_practice_and_careers
+from app.services.inference import infer_practice_and_careers_fast
 from app.services.login_activity_service import record_login
 
 import logging
@@ -169,7 +169,7 @@ def github_callback(request: Request, code: str = Query(...), db: Session = Depe
     for repo in summaries:
         db.add(Repo(user_id=user.id, **repo))
 
-    inference = infer_practice_and_careers(summaries)
+    inference = infer_practice_and_careers_fast(summaries)
     db.query(PracticeDimension).filter(PracticeDimension.user_id == user.id).delete()
     for item in inference.get("practice_dimensions", []):
         db.add(
