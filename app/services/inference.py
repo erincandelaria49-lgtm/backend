@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from app.core.config import settings
 from app.services import flan_t5
@@ -18,19 +17,10 @@ from app.services.learning_path import (
 logger = logging.getLogger(__name__)
 
 
-def _local_flan_model_path() -> str | None:
-    base_dir = Path(__file__).resolve().parents[2]
-    local_dir = base_dir / "models" / "final_flan_t5_github_recommender"
-    if local_dir.exists():
-        return str(local_dir)
-    return None
-
-
 def _flan_model() -> str:
     if settings.flan_t5_model:
         return settings.flan_t5_model
-    local_model = _local_flan_model_path()
-    return local_model or "google/flan-t5-base"
+    return "Leiboy21/Google_Flan_T5_Base"
 
 
 def _repo_values(repo: dict, key: str) -> list[str]:

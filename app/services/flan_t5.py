@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from functools import lru_cache
+from pathlib import Path
 
 from app.services.inference_utils import _normalize_inference
 from app.services.learning_path import _normalize_steps
@@ -36,12 +37,13 @@ def _load_generator(model_name: str):
     except ImportError as exc:
         raise RuntimeError("Install transformers, torch, and sentencepiece to use FLAN-T5 inference.") from exc
 
+    local_files_only = Path(model_name).exists()
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
-        local_files_only=True,
+        local_files_only=local_files_only,
         clean_up_tokenization_spaces=True,
     )
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_name, local_files_only=True)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name, local_files_only=local_files_only)
     return pipeline(
         "text2text-generation",
         model=model,
