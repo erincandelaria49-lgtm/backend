@@ -83,6 +83,24 @@ def _ensure_badge_uniqueness():
     except SQLAlchemyError as exc:
         logger.warning("Badge uniqueness repair skipped because the database is unavailable: %s", str(exc)[:240])
 
+
+def _bootstrap_schema_background():
+    try:
+        ensure_schema_initialized()
+        if settings.app_env.strip().lower() == "production" and not _should_run_runtime_schema_init():
+            logger.info("Skipping runtime schema initialization in production background bootstrap.")
+            return
+        _ensure_runtime_schema()
+    except SQLAlchemyError as exc:
+        logger.warning("Background schema bootstrap failed: %s", str(exc)[:240])
+
+
+def _repair_badges_background():
+    try:
+        _ensure_badge_uniqueness()
+    except SQLAlchemyError as exc:
+        logger.warning("Background badge repair failed: %s", str(exc)[:240])
+
 app = FastAPI(title="LSPU AI-Enhanced Gamified Student Portfolio Platform API")
 
 is_production = settings.app_env.strip().lower() == "production"
@@ -118,15 +136,8 @@ app.include_router(login_analytics.router)
 
 @app.on_event("startup")
 def startup_event():
-    ensure_schema_initialized()
-    if settings.app_env.strip().lower() == "production" and not _should_run_runtime_schema_init():
-        logger.info("Skipping runtime schema initialization during startup in production.")
-        _ensure_badge_uniqueness()
-        if settings.flan_t5_model:
-            Thread(target=flan_t5.warmup_model, args=(settings.flan_t5_model,), daemon=True).start()
-        return
-    _ensure_runtime_schema()
-    _ensure_badge_uniqueness()
+    Thread(target=_bootstrap_schema_background, daemon=True).start()
+    Thread(target=_repair_badges_background, daemon=True).start()
     if settings.flan_t5_model:
         Thread(target=flan_t5.warmup_model, args=(settings.flan_t5_model,), daemon=True).start()
 
