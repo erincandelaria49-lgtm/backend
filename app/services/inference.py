@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import logging
 
 from app.core.config import settings
@@ -15,6 +16,10 @@ from app.services.learning_path import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _should_use_flan() -> bool:
+    return os.getenv("ENABLE_FLAN_T5_INFERENCE", "").strip().lower() == "true"
 
 
 def _flan_model() -> str:
@@ -124,8 +129,15 @@ def _fallback_practice_and_careers(repos: list[dict]) -> dict:
 
 
 def infer_practice_and_careers(repos: list[dict]) -> dict:
+    if not _should_use_flan():
+        return _fallback_practice_and_careers(repos)
+
+    model = _flan_model().strip()
+    if not model:
+        return _fallback_practice_and_careers(repos)
+
     try:
-        return flan_t5.infer_practice_and_careers(_flan_model(), repos)
+        return flan_t5.infer_practice_and_careers(model, repos)
     except Exception as exc:
         logger.warning("Using deterministic inference fallback: %s", exc)
         return _fallback_practice_and_careers(repos)
