@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.security import create_access_token, decode_access_token
 from app.core.passwords import hash_password, verify_password
 from app.core.dependencies import get_current_user
-from app.db import get_db
+from app.db import ensure_schema_initialized, get_db
 from app.models import Badge, CareerSuggestion, PracticeDimension, Repo, User, PortfolioSettings, AdminAccount, ActivityLog
 from app.models import CertificateRecord, DailyQuestClaim, WeeklyChallengeClaim
 from app.schemas import AdminLoginIn, AdminLoginOut
@@ -89,6 +89,7 @@ def github_login():
 
 @router.get("/github/callback")
 def github_callback(request: Request, code: str = Query(...), db: Session = Depends(get_db)):
+    ensure_schema_initialized(force=True)
     try:
         token = exchange_code_for_token(
             settings.github_client_id,

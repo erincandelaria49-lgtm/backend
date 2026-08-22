@@ -9,7 +9,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
-from app.db import Base, engine
+from app.db import Base, engine, ensure_schema_initialized
 from app.routers import auth, users, admin, analytics
 from app.routers import login_analytics
 from app.services.badge_sync import repair_badge_duplicates
@@ -118,6 +118,7 @@ app.include_router(login_analytics.router)
 
 @app.on_event("startup")
 def startup_event():
+    ensure_schema_initialized()
     if settings.app_env.strip().lower() == "production" and not _should_run_runtime_schema_init():
         logger.info("Skipping runtime schema initialization during startup in production.")
         _ensure_badge_uniqueness()
