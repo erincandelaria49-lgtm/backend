@@ -51,6 +51,14 @@ def _load_generator(model_name: str):
     )
 
 
+def warmup_model(model_name: str) -> None:
+    try:
+        _load_generator(model_name)
+        logger.info("FLAN-T5 warmup completed for %s", model_name)
+    except Exception as exc:
+        logger.warning("FLAN-T5 warmup failed for %s: %s", model_name, str(exc)[:240])
+
+
 def _generate_json(model_name: str, prompt: str, max_new_tokens: int = 512) -> dict | None:
     content = _generate_text(model_name, prompt, max_new_tokens=max_new_tokens)
     return _extract_json(content)

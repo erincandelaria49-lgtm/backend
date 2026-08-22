@@ -20,7 +20,8 @@ from app.services.github import (
     summarize_repo,
 )
 from app.services.gamification import compute_xp_and_badges
-from app.services.inference import infer_practice_and_careers_fast
+from app.services.badge_sync import upsert_badges
+from app.services.inference import infer_practice_and_careers
 from app.services.login_activity_service import record_login
 
 import logging
@@ -169,7 +170,7 @@ def github_callback(request: Request, code: str = Query(...), db: Session = Depe
     for repo in summaries:
         db.add(Repo(user_id=user.id, **repo))
 
-    inference = infer_practice_and_careers_fast(summaries)
+    inference = infer_practice_and_careers(summaries)
     db.query(PracticeDimension).filter(PracticeDimension.user_id == user.id).delete()
     for item in inference.get("practice_dimensions", []):
         db.add(
@@ -192,36 +193,7 @@ def github_callback(request: Request, code: str = Query(...), db: Session = Depe
         )
 
     gamification = compute_xp_and_badges(summaries, context=_build_badge_context(db, user))
-    existing_badges = {
-        badge.label: badge for badge in db.query(Badge).filter(Badge.user_id == user.id).all()
-    }
-    seen_labels: set[str] = set()
-    for badge in gamification.badges:
-        seen_labels.add(badge["label"])
-        existing = existing_badges.get(badge["label"])
-        if existing:
-            existing.description = badge["description"]
-            existing.criteria = badge["criteria"]
-            existing.rarity = badge["rarity"]
-            existing.achieved = badge["achieved"]
-            if badge["achieved"] is False:
-                existing.claimed = False
-        else:
-            db.add(
-                Badge(
-                    user_id=user.id,
-                    label=badge["label"],
-                    description=badge["description"],
-                    criteria=badge["criteria"],
-                    rarity=badge["rarity"],
-                    achieved=badge["achieved"],
-                    claimed=False,
-                )
-            )
-
-    for label, stale in existing_badges.items():
-        if label not in seen_labels:
-            db.delete(stale)
+    upsert_badges(db, user.id, gamification.badges, preserve_achieved=False, clear_claimed_when_unachieved=True)
 
     db.add(ActivityLog(user_id=user.id, event="login"))
     db.commit()

@@ -1,5 +1,6 @@
 import logging
 import os
+from threading import Thread
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +12,8 @@ from app.core.config import settings
 from app.db import Base, engine
 from app.routers import auth, users, admin, analytics
 from app.routers import login_analytics
+from app.services.badge_sync import repair_badge_duplicates
+from app.services import flan_t5
 
 
 logger = logging.getLogger(__name__)
@@ -73,6 +76,13 @@ def _ensure_runtime_schema():
     except SQLAlchemyError as exc:
         logger.warning("Database initialization skipped during startup: %s", str(exc)[:240])
 
+
+def _ensure_badge_uniqueness():
+    try:
+        repair_badge_duplicates(engine)
+    except SQLAlchemyError as exc:
+        logger.warning("Badge uniqueness repair skipped because the database is unavailable: %s", str(exc)[:240])
+
 app = FastAPI(title="LSPU AI-Enhanced Gamified Student Portfolio Platform API")
 
 is_production = settings.app_env.strip().lower() == "production"
@@ -110,8 +120,14 @@ app.include_router(login_analytics.router)
 def startup_event():
     if settings.app_env.strip().lower() == "production" and not _should_run_runtime_schema_init():
         logger.info("Skipping runtime schema initialization during startup in production.")
+        _ensure_badge_uniqueness()
+        if settings.flan_t5_model:
+            Thread(target=flan_t5.warmup_model, args=(settings.flan_t5_model,), daemon=True).start()
         return
     _ensure_runtime_schema()
+    _ensure_badge_uniqueness()
+    if settings.flan_t5_model:
+        Thread(target=flan_t5.warmup_model, args=(settings.flan_t5_model,), daemon=True).start()
 
 
 @app.get("/health")
