@@ -23,6 +23,10 @@ def _should_run_runtime_schema_init() -> bool:
     return os.getenv("RUN_RUNTIME_SCHEMA_INIT", "").strip().lower() == "true"
 
 
+def _should_warmup_flan_t5() -> bool:
+    return os.getenv("ENABLE_FLAN_T5_WARMUP", "").strip().lower() == "true"
+
+
 def _ensure_certificate_record_columns():
     try:
         inspector = inspect(engine)
@@ -138,7 +142,7 @@ app.include_router(login_analytics.router)
 def startup_event():
     Thread(target=_bootstrap_schema_background, daemon=True).start()
     Thread(target=_repair_badges_background, daemon=True).start()
-    if settings.flan_t5_model:
+    if settings.flan_t5_model and _should_warmup_flan_t5():
         Thread(target=flan_t5.warmup_model, args=(settings.flan_t5_model,), daemon=True).start()
 
 
