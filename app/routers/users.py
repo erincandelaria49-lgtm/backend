@@ -113,6 +113,7 @@ from app.services.engagement_service import refresh_engagement, compute_engageme
 from app.models import EngagementCommit, XpHistory
 from app.services.engagement_service import week_start_for_date
 from app.services.certificate_sync import get_freecodecamp_stats, sync_freecodecamp_certificates
+from app.services.badge_sync import upsert_badges
 
 
 router = APIRouter(prefix="/api", tags=["users"])
@@ -1011,37 +1012,7 @@ def _build_badge_context(
 
 
 def _sync_badges(db: Session, user_id: int, generated_badges: list[dict]) -> None:
-    existing_badges = {
-        badge.label: badge
-        for badge in db.query(Badge).filter(Badge.user_id == user_id).all()
-    }
-    seen_labels: set[str] = set()
-    for badge in generated_badges:
-        seen_labels.add(badge["label"])
-        existing = existing_badges.get(badge["label"])
-        if existing:
-            existing.description = badge["description"]
-            existing.criteria = badge["criteria"]
-            existing.rarity = badge["rarity"]
-            # Keep achievements sticky once earned so sync/recompute does not
-            # accidentally re-open claimed badges due to temporary signal drift.
-            existing.achieved = bool(existing.achieved) or bool(badge["achieved"])
-        else:
-            db.add(
-                Badge(
-                    user_id=user_id,
-                    label=badge["label"],
-                    description=badge["description"],
-                    criteria=badge["criteria"],
-                    rarity=badge["rarity"],
-                    achieved=badge["achieved"],
-                    claimed=badge.get("claimed", False),
-                )
-            )
-
-    for label, stale in existing_badges.items():
-        if label not in seen_labels:
-            db.delete(stale)
+    upsert_badges(db, user_id, generated_badges, preserve_achieved=True, clear_claimed_when_unachieved=False)
 
 
 def _repo_summaries_for_inference(repos: list[Repo]) -> list[dict]:
