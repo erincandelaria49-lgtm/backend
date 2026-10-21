@@ -72,6 +72,51 @@ def _fallback_practice_and_careers(repos: list[dict]) -> dict:
             "career": "DevOps or Systems Developer",
             "terms": {"c", "c++", "rust", "docker", "linux", "devops", "network"},
         },
+        "fullstack": {
+            "label": "Full-Stack Web Development",
+            "career": "Full-Stack Developer",
+            "terms": {"full-stack", "fullstack", "next.js", "mern", "mean", "api", "react", "node.js"},
+        },
+        "mobile": {
+            "label": "Mobile Application Development",
+            "career": "Mobile App Developer",
+            "terms": {"android", "ios", "flutter", "dart", "kotlin", "swift", "react native"},
+        },
+        "analytics": {
+            "label": "Data Analytics",
+            "career": "Data Analyst",
+            "terms": {"analytics", "analysis", "excel", "tableau", "powerbi", "pandas", "sql"},
+        },
+        "datascience": {
+            "label": "Data Science",
+            "career": "Data Scientist",
+            "terms": {"data science", "statistics", "pandas", "numpy", "scikit-learn", "jupyter"},
+        },
+        "ai": {
+            "label": "Artificial Intelligence and Machine Learning",
+            "career": "AI/ML Engineer",
+            "terms": {"ai", "ml", "machine learning", "deep learning", "tensorflow", "pytorch", "llm"},
+        },
+        "cloud": {
+            "label": "Cloud and Infrastructure",
+            "career": "Cloud Engineer",
+            "terms": {"aws", "azure", "gcp", "cloud", "kubernetes", "terraform", "deployment"},
+        },
+        "security": {
+            "label": "Cybersecurity",
+            "career": "Cybersecurity Engineer",
+            "terms": {"security", "cybersecurity", "owasp", "jwt", "oauth", "encryption", "vulnerability"},
+        },
+        "database": {
+            "label": "Database Engineering",
+            "career": "Database Administrator",
+            "terms": {"database", "sql", "postgres", "postgresql", "mysql", "mongodb", "supabase"},
+        },
+        "qa": {
+            "label": "Quality Assurance and Test Automation",
+            "career": "QA/Automation Engineer",
+            "terms": {"test", "testing", "pytest", "jest", "playwright", "selenium", "automation"},
+        },
     }
     scores: dict[str, dict] = {
         key: {"score": 0, "evidence": []}
@@ -141,10 +186,28 @@ def _fallback_practice_and_careers(repos: list[dict]) -> dict:
 
 def infer_practice_and_careers(repos: list[dict]) -> dict:
     try:
-        return flan_t5.infer_practice_and_careers(_flan_model(), repos)
+        model_result = flan_t5.infer_practice_and_careers(_flan_model(), repos)
+        signal_result = _fallback_practice_and_careers(repos)
+        seen = {str(item.get("title") or "").strip().lower() for item in model_result.get("career_suggestions", [])}
+        merged = list(model_result.get("career_suggestions", []))
+        for item in signal_result.get("career_suggestions", []):
+            title_key = str(item.get("title") or "").strip().lower()
+            if title_key and title_key not in seen:
+                merged.append(item)
+                seen.add(title_key)
+        model_result["career_suggestions"] = _pad_career_suggestions(merged)
+        return model_result
     except Exception as exc:
-        logger.warning("Using deterministic inference fallback: %s", exc)
-        return _fallback_practice_and_careers(repos)
+        logger.warning("FLAN-T5 career inference failed; trying LLM then rule-based fallback: %s", exc)
+        fallback_result = _fallback_practice_and_careers(repos)
+        if llm_refiner.is_enabled():
+            try:
+                refined_result = llm_refiner.refine_career_result(fallback_result, repos)
+                if refined_result:
+                    return refined_result
+            except Exception as llm_exc:
+                logger.warning("LLM career refinement failed, using rule-based result: %s", llm_exc)
+        return fallback_result
 
 
 def _model_signal_summary(practice_dimensions: list[dict] | None) -> str:
@@ -462,11 +525,11 @@ def infer_learning_path(
             practice_dimensions=practice_dimensions,
         )
     except Exception as exc:
-        logger.warning("FLAN-T5 learning-path generation failed, using rule-based fallback: %s", exc)
+        logger.warning("FLAN-T5 learning-path generation failed; trying LLM then rule-based fallback: %s", exc)
         steps = fallback_steps
     else:
         if not _learning_steps_are_usable(steps):
-            logger.warning("FLAN-T5 learning-path output was incomplete, using rule-based fallback.")
+            logger.warning("FLAN-T5 learning-path output was incomplete; trying LLM then rule-based fallback.")
             steps = fallback_steps
 
     if llm_refiner.is_enabled():

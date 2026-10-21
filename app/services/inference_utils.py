@@ -47,10 +47,19 @@ DEFAULT_CAREER_SUGGESTIONS = [
         "confidence": 50,
         "reasoning": "Baseline track suggested until more repo signals are available.",
     },
+    {"title": "Full-Stack Developer", "confidence": 45, "reasoning": "Related track available for mixed web and software signals."},
+    {"title": "Mobile App Developer", "confidence": 45, "reasoning": "Related track available for mobile development signals."},
+    {"title": "Data Analyst", "confidence": 45, "reasoning": "Related track available for data and analytics signals."},
+    {"title": "Data Scientist", "confidence": 45, "reasoning": "Related track available for statistical and data science signals."},
+    {"title": "AI/ML Engineer", "confidence": 45, "reasoning": "Related track available for machine learning and AI signals."},
+    {"title": "Cloud Engineer", "confidence": 45, "reasoning": "Related track available for cloud and deployment signals."},
+    {"title": "Cybersecurity Engineer", "confidence": 45, "reasoning": "Related track available for security and authentication signals."},
+    {"title": "Database Administrator", "confidence": 45, "reasoning": "Related track available for database and SQL signals."},
+    {"title": "QA/Automation Engineer", "confidence": 45, "reasoning": "Related track available for testing and automation signals."},
 ]
 
 
-def _pad_career_suggestions(careers: list[dict], target_count: int = 4) -> list[dict]:
+def _pad_career_suggestions(careers: list[dict], target_count: int = 12) -> list[dict]:
     padded = list(careers)
     seen = {str(item.get("title") or "").strip().lower() for item in padded if item}
     for fallback in DEFAULT_CAREER_SUGGESTIONS:

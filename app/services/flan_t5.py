@@ -110,6 +110,8 @@ def _generate_text_remote(model_name: str, prompt: str, max_new_tokens: int = 51
     base_url = (settings.hf_endpoint_url or "").rstrip("/")
     if not base_url:
         raise RuntimeError("Hugging Face inference endpoint is not configured.")
+    if base_url == "https://router.huggingface.co/hf-inference":
+        base_url = "https://router.huggingface.co/hf-inference/models"
 
     endpoint = base_url if base_url.endswith(model_name) else f"{base_url}/{model_name}"
     try:
@@ -133,7 +135,13 @@ def _generate_text_remote(model_name: str, prompt: str, max_new_tokens: int = 51
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:
-        logger.error("Hugging Face API inference failed: %s", str(exc)[:240])
+        err_msg = str(exc)[:240]
+        if hasattr(exc, "response") and exc.response is not None:
+            try:
+                err_msg += f" | Details: {exc.response.text[:200]}"
+            except Exception:
+                pass
+        logger.error("Hugging Face API inference failed: %s", err_msg)
         raise RuntimeError("Hugging Face API inference failed.") from exc
 
     if isinstance(payload, list) and payload:
