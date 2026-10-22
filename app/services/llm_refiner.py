@@ -555,11 +555,12 @@ def generate_project_learning_paths(
         )
         parsed = _extract_json(content)
     except Exception as exc:
-        logger.info("LLM project learning-path generation skipped after request/parse failure: %s", str(exc)[:240])
+        logger.warning("Groq project learning-path request/parse failed: %s", str(exc)[:500])
         return []
 
     projects = parsed.get("projects") or []
     if not isinstance(projects, list) or not projects:
+        logger.warning("Groq project learning-path response did not contain a non-empty 'projects' list.")
         return []
 
     by_repo = {str(item.get("repo_name") or "").strip().lower(): item for item in fallback_projects}
@@ -584,6 +585,11 @@ def generate_project_learning_paths(
             continue
         normalized_projects.append({"repo_name": repo_name, "steps": steps})
 
+    logger.warning(
+        "Groq project learning-path response normalized: %s/%s projects accepted.",
+        len(normalized_projects),
+        len(projects),
+    )
     return normalized_projects
 
 

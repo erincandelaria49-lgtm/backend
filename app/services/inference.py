@@ -585,7 +585,14 @@ def infer_project_learning_paths(
                 max_projects=len(repos) or 1,
                 personalization_key=_llm_personalization_key(personalization_key),
             )
-            if _project_paths_are_usable(refined_projects, repos):
+            groq_projects_usable = _project_paths_are_usable(refined_projects, repos)
+            logger.warning(
+                "Groq project-learning-path result: projects=%s, usable=%s, repositories=%s",
+                len(refined_projects),
+                groq_projects_usable,
+                len(repos),
+            )
+            if groq_projects_usable:
                 projects = refined_projects
         except Exception as exc:
             logger.warning("Groq project learning-path generation failed: %s", exc)
