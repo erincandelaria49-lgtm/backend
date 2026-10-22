@@ -279,7 +279,7 @@ def _chat_completion(messages: list[dict[str, str]], max_tokens: int = 1400) -> 
             payload["reasoning_effort"] = "low"
     else:
         payload["max_tokens"] = max_tokens
-    if _use_json_mode():
+    if _use_json_mode() or (provider == "groq" and model_name.startswith("openai/gpt-oss")):
         payload["response_format"] = {"type": "json_object"}
 
     last_error: Exception | None = None
@@ -566,7 +566,7 @@ def generate_project_learning_paths(
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=1600,
+            max_tokens=3600,
         )
         parsed = _extract_json(content)
     except Exception as exc:
