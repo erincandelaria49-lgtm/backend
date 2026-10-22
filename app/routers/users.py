@@ -3794,6 +3794,11 @@ def get_project_learning_paths(
         {"label": item.label, "confidence": item.confidence, "evidence": item.evidence}
         for item in practice_rows
     ]
+    # A repository/profile-specific generation key prevents an older cached
+    # path from being returned after GitHub data or the AI engine changes.
+    generation_key = hashlib.sha256(
+        repr((summaries, practice_dimensions, "v8-ai-only-groq-fallback")).encode("utf-8")
+    ).hexdigest()
 
     projects = infer_project_learning_paths(
         summaries,
@@ -3802,24 +3807,12 @@ def get_project_learning_paths(
         practice_dimensions=practice_dimensions,
         personalization_key=username,
     )
+    if not projects:
+        raise HTTPException(
+            status_code=503,
+            detail="AI learning-path generation is temporarily unavailable. Please try again.",
+        )
     project_baseline = dict(portfolio_settings.project_learning_path_baseline or {})
-    if not projects and isinstance(project_baseline, dict):
-        cached_projects: list[dict] = []
-        for repo_name, baseline_entry in project_baseline.items():
-            if not isinstance(baseline_entry, dict):
-                continue
-            cached_steps = baseline_entry.get("steps")
-            if not isinstance(cached_steps, list) or not cached_steps:
-                continue
-            cached_projects.append(
-                {
-                    "repo_name": str(repo_name or "Unnamed repo"),
-                    "steps": cached_steps,
-                    "progress_percent": 0,
-                }
-            )
-        if cached_projects:
-            projects = cached_projects
 
     projects_with_progress = []
 
@@ -3872,6 +3865,7 @@ def get_project_learning_paths(
                 "baseline_signals": list(repo_signals),
                 "latest_signals": list(repo_signals),
                 "steps": project.get("steps") or [],
+                "generation_key": generation_key,
                 "path_level": path_level,
                 "stage_status_overrides": stage_status_overrides,
                 "stage_checks": stage_checks,
@@ -3883,7 +3877,11 @@ def get_project_learning_paths(
             steps = [{**step, "status": "done"} for step in (cached_steps or project.get("steps") or [])]
             progress_percent = 100 if steps else 0
         else:
-            if cached_steps and set(cached_signals_list) == set(repo_signals):
+            if (
+                cached_steps
+                and set(cached_signals_list) == set(repo_signals)
+                and str(baseline_entry.get("generation_key") or "") == generation_key
+            ):
                 steps_source = cached_steps
             else:
                 steps_source = project.get("steps") or []
@@ -3891,6 +3889,7 @@ def get_project_learning_paths(
                     "baseline_signals": baseline_signals_list,
                     "latest_signals": list(repo_signals),
                     "steps": steps_source,
+                    "generation_key": generation_key,
                     "path_level": path_level,
                     "stage_status_overrides": stage_status_overrides,
                     "stage_checks": stage_checks,

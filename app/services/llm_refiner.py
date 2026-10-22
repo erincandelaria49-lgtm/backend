@@ -423,11 +423,12 @@ def generate_learning_path_steps(
     *,
     repos: list[dict],
     practice_dimensions: list[dict] | None = None,
-    fallback_steps: list[dict],
+    fallback_steps: list[dict] | None = None,
     max_steps: int = 8,
 ) -> list[dict]:
-    if not fallback_steps or not _enabled():
-        return fallback_steps
+    fallback_steps = list(fallback_steps or [])
+    if not _enabled():
+        return []
 
     compact_steps = [_compact_step(step) for step in fallback_steps[:max_steps]]
     compact_repos = [_compact_repo(repo) for repo in repos[:10]]
@@ -468,34 +469,38 @@ def generate_learning_path_steps(
         parsed = _extract_json(content)
     except Exception as exc:
         logger.info("LLM learning-path generation skipped after request/parse failure: %s", str(exc)[:240])
-        return fallback_steps
+        return []
 
     steps = parsed.get("steps") or []
     if not isinstance(steps, list) or not steps:
-        return fallback_steps
+        return []
 
     try:
         normalized = _normalize_steps({"steps": steps}, max_steps=max_steps, enforce_contract=False)
     except Exception as exc:
         logger.info("LLM learning-path normalization failed: %s", str(exc)[:240])
         return fallback_steps
-    return normalized or fallback_steps
+    return normalized
 
 
 def generate_project_learning_paths(
     *,
     repos: list[dict],
     practice_dimensions: list[dict] | None = None,
-    fallback_projects: list[dict],
+    fallback_projects: list[dict] | None = None,
     max_projects: int | None = None,
     max_steps_per_project: int = 5,
     personalization_key: str = "",
 ) -> list[dict]:
-    if not fallback_projects or not _enabled():
-        return fallback_projects
+    # This function is an AI generator, not a rule-based fallback.  An empty
+    # result is intentional when the provider is unavailable so callers do not
+    # silently show a generic path or overwrite a previously valid path.
+    fallback_projects = list(fallback_projects or [])
+    if not _enabled():
+        return []
 
     if max_projects is None:
-        max_projects = len(fallback_projects)
+        max_projects = len(repos) or 1
 
     compact_repos = [_compact_repo(repo) for repo in repos[:max_projects]]
     compact_dimensions = [_compact_dimension(item) for item in (practice_dimensions or [])[:4] if isinstance(item, dict)]
@@ -540,11 +545,11 @@ def generate_project_learning_paths(
         parsed = _extract_json(content)
     except Exception as exc:
         logger.info("LLM project learning-path generation skipped after request/parse failure: %s", str(exc)[:240])
-        return fallback_projects
+        return []
 
     projects = parsed.get("projects") or []
     if not isinstance(projects, list) or not projects:
-        return fallback_projects
+        return []
 
     by_repo = {str(item.get("repo_name") or "").strip().lower(): item for item in fallback_projects}
     normalized_projects: list[dict] = []
@@ -558,20 +563,17 @@ def generate_project_learning_paths(
         if not isinstance(raw_steps, list) or not raw_steps:
             fallback = by_repo.get(repo_name.lower())
             if fallback:
-                normalized_projects.append(dict(fallback))
+                continue
             continue
         try:
             steps = _normalize_steps({"steps": raw_steps}, max_steps=max_steps_per_project, enforce_contract=False)
         except Exception:
             steps = []
         if not steps:
-            fallback = by_repo.get(repo_name.lower())
-            if fallback:
-                normalized_projects.append(dict(fallback))
             continue
         normalized_projects.append({"repo_name": repo_name, "steps": steps})
 
-    return normalized_projects or fallback_projects
+    return normalized_projects
 
 
 def generate_certificate_suggestions(

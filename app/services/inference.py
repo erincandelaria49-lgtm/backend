@@ -510,12 +510,6 @@ def infer_learning_path(
     practice_dimensions: list[dict] | None = None,
     personalization_key: str = "",
 ) -> list[dict]:
-    fallback_steps = _prepare_rule_based_learning_fallback(
-        repos,
-        detected_skills,
-        practice_dimensions,
-        personalization_key,
-    )
     try:
         steps = flan_t5.infer_learning_path(
             _flan_model(),
@@ -525,28 +519,29 @@ def infer_learning_path(
             practice_dimensions=practice_dimensions,
         )
     except Exception as exc:
-        logger.warning("FLAN-T5 learning-path generation failed; trying LLM then rule-based fallback: %s", exc)
-        steps = fallback_steps
+        logger.warning("FLAN-T5 learning-path generation failed; trying Groq LLM: %s", exc)
+        steps = []
     else:
         if not _learning_steps_are_usable(steps):
-            logger.warning("FLAN-T5 learning-path output was incomplete; trying LLM then rule-based fallback.")
-            steps = fallback_steps
+            logger.warning("FLAN-T5 learning-path output was incomplete; trying Groq LLM.")
+            steps = []
 
-    if llm_refiner.is_enabled():
+    if not steps and llm_refiner.is_enabled():
         try:
-            if steps is fallback_steps:
-                refined_steps = llm_refiner.generate_learning_path_steps(
-                    repos=repos,
-                    practice_dimensions=practice_dimensions,
-                    fallback_steps=fallback_steps,
-                    max_steps=8,
-                )
-            else:
-                refined_steps = llm_refiner.refine_learning_steps(steps, repos)
+            refined_steps = llm_refiner.generate_learning_path_steps(
+                repos=repos,
+                practice_dimensions=practice_dimensions,
+                fallback_steps=[],
+                max_steps=8,
+            )
             if _learning_steps_are_usable(refined_steps):
                 steps = refined_steps
         except Exception as exc:
-            logger.warning("LLM enhancer failed for learning path, keeping previous output: %s", exc)
+            logger.warning("Groq learning-path generation failed: %s", exc)
+
+    if not steps:
+        logger.warning("No AI-generated learning path is available; returning an empty result.")
+        return []
 
     steps = _anchor_steps_to_repos(steps, repos)
     steps = _prioritize_steps_by_focus(steps, practice_dimensions)
@@ -562,17 +557,6 @@ def infer_project_learning_paths(
     personalization_key: str = "",
 ) -> list[dict]:
     model_signal = _model_signal_summary(practice_dimensions)
-    fallback_projects = [
-        {
-            "repo_name": str(repo.get("name") or "Unnamed repo"),
-                "steps": _normalize_steps(
-                    {"steps": _rule_based_project_path(repo, personalization_key=personalization_key, practice_dimensions=practice_dimensions)},
-                max_steps=5,
-                enforce_contract=False,
-            ),
-        }
-        for repo in repos
-    ]
     try:
         projects = flan_t5.infer_project_learning_paths(
             _flan_model(),
@@ -582,46 +566,38 @@ def infer_project_learning_paths(
             practice_dimensions=practice_dimensions,
         )
     except Exception as exc:
-        logger.warning("FLAN-T5 project learning-path generation failed, using rule-based fallback projects: %s", exc)
-        projects = fallback_projects
+        logger.warning("FLAN-T5 project learning-path generation failed; trying Groq LLM: %s", exc)
+        projects = []
     else:
         if not _project_paths_are_usable(projects, repos):
-            logger.warning("FLAN-T5 project learning-path output was incomplete, using rule-based fallback projects.")
-            projects = fallback_projects
+            logger.warning("FLAN-T5 project learning-path output was incomplete; trying Groq LLM.")
+            projects = []
 
-    if llm_refiner.is_enabled():
+    # Groq is the only fallback. It receives the same repository-specific
+    # evidence and must generate a complete path; no rule-based path is used.
+    if not projects and llm_refiner.is_enabled():
         try:
             refined_projects = llm_refiner.generate_project_learning_paths(
                 repos=repos,
                 practice_dimensions=practice_dimensions,
-                fallback_projects=projects,
-                max_projects=len(projects) or 1,
+                fallback_projects=[],
+                max_projects=len(repos) or 1,
                 personalization_key=_llm_personalization_key(personalization_key),
             )
             if _project_paths_are_usable(refined_projects, repos):
                 projects = refined_projects
         except Exception as exc:
-            logger.warning("LLM enhancer failed for project learning paths, keeping previous output: %s", exc)
+            logger.warning("Groq project learning-path generation failed: %s", exc)
 
-    # Keep a repo-specific safety net and remove repeated milestones returned by
-    # the model/refiner without replacing valid generated stages wholesale.
-    fallback_by_repo = {str(item.get("repo_name") or "").strip(): item for item in fallback_projects}
+    if not projects:
+        logger.warning("No AI-generated project learning path is available; returning an empty result.")
+        return []
+
+    # Remove repeated milestones returned by the model without injecting
+    # generic or rule-based stages.
     for project in projects:
         repo_name = str(project.get("repo_name") or "").strip()
-        fallback_steps = (fallback_by_repo.get(repo_name) or {}).get("steps") or []
         project_steps = list(project.get("steps") or [])
-        if fallback_steps and project_steps:
-            anchor = fallback_steps[0]
-            anchor_tag = str(anchor.get("tag") or "").strip().lower()
-            has_anchor = any(
-                anchor_tag and (
-                    str(step.get("tag") or "").strip().lower() == anchor_tag
-                    or anchor_tag in [str(tag).strip().lower() for tag in (step.get("tags") or [])]
-                )
-                for step in project_steps
-            )
-            if not has_anchor:
-                project_steps = [anchor, *project_steps]
         deduped_steps = []
         seen_step_keys = set()
         for step in project_steps:
@@ -629,13 +605,6 @@ def infer_project_learning_paths(
             if step_key and step_key not in seen_step_keys:
                 seen_step_keys.add(step_key)
                 deduped_steps.append(step)
-        for fallback_step in fallback_steps:
-            if len(deduped_steps) >= 5:
-                break
-            fallback_key = " ".join(str(fallback_step.get("title") or fallback_step.get("description") or "").lower().split())
-            if fallback_key and fallback_key not in seen_step_keys:
-                seen_step_keys.add(fallback_key)
-                deduped_steps.append(fallback_step)
         if deduped_steps:
             project["steps"] = deduped_steps[:5]
 
