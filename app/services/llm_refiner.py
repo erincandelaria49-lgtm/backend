@@ -475,7 +475,7 @@ def generate_learning_path_steps(
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=2200,
+            max_tokens=1400,
         )
         parsed = _extract_json(content)
     except Exception as exc:
@@ -551,7 +551,7 @@ def generate_project_learning_paths(
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=2600,
+            max_tokens=1600,
         )
         parsed = _extract_json(content)
     except Exception as exc:
