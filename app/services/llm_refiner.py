@@ -266,8 +266,19 @@ def _chat_completion(messages: list[dict[str, str]], max_tokens: int = 1400) -> 
         "model": settings.llm_refiner_model,
         "messages": messages,
         "temperature": 0.35,
-        "max_tokens": max_tokens,
     }
+    provider = (settings.llm_refiner_provider or "").strip().lower()
+    model_name = (settings.llm_refiner_model or "").strip().lower()
+    if provider == "groq":
+        # GPT-OSS models can spend the whole completion budget on hidden
+        # reasoning and return an empty message.content. Disable reasoning for
+        # this structured JSON task and use Groq's current token parameter.
+        payload["max_completion_tokens"] = max_tokens
+        if model_name.startswith("openai/gpt-oss"):
+            payload["include_reasoning"] = False
+            payload["reasoning_effort"] = "low"
+    else:
+        payload["max_tokens"] = max_tokens
     if _use_json_mode():
         payload["response_format"] = {"type": "json_object"}
 
@@ -286,7 +297,11 @@ def _chat_completion(messages: list[dict[str, str]], max_tokens: int = 1400) -> 
             )
             response.raise_for_status()
             payload = response.json()
-            return str(payload["choices"][0]["message"]["content"])
+            message = payload["choices"][0]["message"]
+            content = str(message.get("content") or "").strip()
+            if not content:
+                raise RuntimeError("LLM refiner returned empty message content.")
+            return content
         except requests.HTTPError as exc:
             last_error = exc
             status_code = exc.response.status_code if exc.response is not None else None
