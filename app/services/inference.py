@@ -575,6 +575,7 @@ def infer_project_learning_paths(
 
     # Groq is the only fallback. It receives the same repository-specific
     # evidence and must generate a complete path; no rule-based path is used.
+    logger.warning("LLM refiner runtime configuration: %s", llm_refiner.diagnostics())
     if not projects and llm_refiner.is_enabled():
         try:
             refined_projects = llm_refiner.generate_project_learning_paths(

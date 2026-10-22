@@ -243,6 +243,17 @@ def is_enabled() -> bool:
     return _enabled()
 
 
+def diagnostics() -> dict[str, object]:
+    """Return safe runtime configuration diagnostics without exposing secrets."""
+    return {
+        "llm_enabled": _enabled(),
+        "groq_keys_configured": len(_api_keys()),
+        "provider": (settings.llm_refiner_provider or "").strip().lower(),
+        "model": settings.llm_refiner_model,
+        "base_url": settings.llm_refiner_base_url,
+    }
+
+
 def _chat_completion(messages: list[dict[str, str]], max_tokens: int = 1400) -> str:
     if not _enabled():
         raise RuntimeError("LLM refiner is disabled or missing API key.")
