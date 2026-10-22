@@ -1494,12 +1494,22 @@ def recompute_insights(
     gamification = compute_xp_and_badges(summaries, context=badge_context)
     _sync_badges(db, current_user.id, gamification.badges)
 
+    # Recompute is an explicit request to regenerate every repository path.
+    # Invalidate only generated AI steps; keep stage checks, proofs, and
+    # completion metadata so student work is not lost.
+    portfolio_settings = _get_or_create_portfolio_settings(db, current_user.id)
+    _invalidate_learning_path_caches(portfolio_settings)
+
     db.add(ActivityLog(user_id=current_user.id, event="recompute"))
     db.commit()
     try:
         refresh_engagement(db, current_user)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Engagement is auxiliary to recompute. If its historical-table
+        # sequence is stale, recover the session so the new recommendations
+        # can still be returned instead of raising PendingRollbackError.
+        db.rollback()
+        logger.warning("Engagement refresh skipped after recompute: %s", str(exc)[:240])
     return get_user(current_user.username, db=db)
 
 
@@ -1679,6 +1689,21 @@ def _get_or_create_portfolio_settings(db: Session, user_id: int) -> PortfolioSet
     db.commit()
     db.refresh(settings_row)
     return settings_row
+
+
+def _invalidate_learning_path_caches(portfolio_settings: PortfolioSettings) -> None:
+    """Invalidate generated paths while preserving student progress evidence."""
+    portfolio_settings.learning_path_baseline = []
+    state = dict(portfolio_settings.project_learning_path_baseline or {})
+    for key, value in list(state.items()):
+        if str(key).startswith("_") or not isinstance(value, dict):
+            continue
+        refreshed = dict(value)
+        refreshed["baseline_signals"] = []
+        refreshed["latest_signals"] = []
+        refreshed["steps"] = []
+        state[key] = refreshed
+    portfolio_settings.project_learning_path_baseline = state
 
 
 def _portfolio_signal_labels(repos: list[Repo], limit: int = 5) -> list[str]:
@@ -1869,6 +1894,9 @@ def get_learning_path(
     skill_gaps = identify_skill_gaps(competency_levels)
     signals = build_signal_set(summaries, include_repo_identity=False)
     signals.add(f"personalization:{username}")
+    # Bump this whenever the inference/fallback pipeline changes so saved
+    # learning paths are regenerated instead of silently serving old output.
+    signals.add("recommendation-engine:v7-flan-t5-groq-repository-paths")
     baseline_payload = portfolio_settings.learning_path_baseline or []
     baseline_signals_list: list[str] = []
     cached_signals_list: list[str] = []
@@ -3801,6 +3829,7 @@ def get_project_learning_paths(
         repo_signals = build_signal_set([repo] if repo else [], include_repo_identity=False)
         repo_signals.add(f"personalization:{username}")
         repo_signals.add("project-learning-path-schema:v5-canonical-domain-stages")
+        repo_signals.add("recommendation-engine:v7-flan-t5-groq-repository-paths")
         baseline_key = _project_baseline_key(project_baseline, repo_name)
         baseline_entry = project_baseline.get(baseline_key) or []
         baseline_signals_list: list[str] = []
@@ -3833,7 +3862,12 @@ def get_project_learning_paths(
 
         baseline_signals = set(baseline_signals_list)
         if not baseline_signals:
-            steps = [{**step, "status": "todo"} for step in (project.get("steps") or [])]
+            if repo_completed:
+                # A refreshed path for an already completed repository should
+                # remain visibly completed without deleting its proof history.
+                steps = [{**step, "status": "done"} for step in (project.get("steps") or [])]
+            else:
+                steps = [{**step, "status": "todo"} for step in (project.get("steps") or [])]
             project_baseline[baseline_key] = {
                 "baseline_signals": list(repo_signals),
                 "latest_signals": list(repo_signals),
@@ -3844,7 +3878,7 @@ def get_project_learning_paths(
                 "stage_proof_counts": stage_proof_counts,
                 "stage_progress_updates": stage_progress_updates,
             }
-            progress_percent = 0
+            progress_percent = 100 if repo_completed and steps else 0
         elif repo_completed:
             steps = [{**step, "status": "done"} for step in (cached_steps or project.get("steps") or [])]
             progress_percent = 100 if steps else 0

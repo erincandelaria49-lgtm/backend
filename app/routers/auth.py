@@ -3,6 +3,8 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from urllib.parse import urlencode
+import hashlib
+import json
 
 from app.core.config import settings
 from app.core.security import create_access_token, decode_access_token
@@ -30,6 +32,40 @@ import logging
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 _REGISTRATION_FIELDS = ("display_name", "student_id", "program", "year_level")
+_RECOMMENDATION_ENGINE_VERSION = "v7-flan-t5-groq-repository-paths"
+
+
+def _invalidate_learning_path_caches(portfolio_settings: PortfolioSettings) -> None:
+    """Force the next project-path read to regenerate AI paths once.
+
+    Keep stage checks, proof counts, status overrides, and completion history;
+    only invalidate the generated steps/signals so the next path request runs
+    the current FLAN-T5/Groq pipeline.
+    """
+    portfolio_settings.learning_path_baseline = []
+    state = dict(portfolio_settings.project_learning_path_baseline or {})
+    for key, value in list(state.items()):
+        if str(key).startswith("_") or not isinstance(value, dict):
+            continue
+        refreshed = dict(value)
+        refreshed["baseline_signals"] = []
+        refreshed["latest_signals"] = []
+        refreshed["steps"] = []
+        state[key] = refreshed
+    portfolio_settings.project_learning_path_baseline = state
+
+
+def _recommendation_fingerprint(summaries: list[dict]) -> str:
+    payload = json.dumps(
+        {
+            "engine": _RECOMMENDATION_ENGINE_VERSION,
+            "repos": sorted(summaries, key=lambda item: str(item.get("name") or "").lower()),
+        },
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _build_badge_context(db: Session, user: User) -> dict:
@@ -171,27 +207,48 @@ def github_callback(request: Request, code: str = Query(...), db: Session = Depe
     for repo in summaries:
         db.add(Repo(user_id=user.id, **repo))
 
-    inference = infer_practice_and_careers(summaries)
-    db.query(PracticeDimension).filter(PracticeDimension.user_id == user.id).delete()
-    for item in inference.get("practice_dimensions", []):
-        db.add(
-            PracticeDimension(
-                user_id=user.id,
-                label=item["label"],
-                confidence=item["confidence"],
-                evidence=item.get("evidence", []),
+    portfolio_settings = db.query(PortfolioSettings).filter(PortfolioSettings.user_id == user.id).one_or_none()
+    if portfolio_settings is None:
+        portfolio_settings = PortfolioSettings(user_id=user.id)
+        db.add(portfolio_settings)
+        db.flush()
+    cached_project_state = dict(portfolio_settings.project_learning_path_baseline or {})
+    fingerprint = _recommendation_fingerprint(summaries)
+    practice_rows = db.query(PracticeDimension).filter(PracticeDimension.user_id == user.id).all()
+    career_rows = db.query(CareerSuggestion).filter(CareerSuggestion.user_id == user.id).all()
+    needs_one_time_recompute = (
+        cached_project_state.get("_career_fingerprint") != fingerprint
+        or cached_project_state.get("_recommendation_engine") != _RECOMMENDATION_ENGINE_VERSION
+        or not practice_rows
+        or not career_rows
+    )
+    if needs_one_time_recompute:
+        _invalidate_learning_path_caches(portfolio_settings)
+        cached_project_state = dict(portfolio_settings.project_learning_path_baseline or {})
+        inference = infer_practice_and_careers(summaries)
+        db.query(PracticeDimension).filter(PracticeDimension.user_id == user.id).delete()
+        for item in inference.get("practice_dimensions", []):
+            db.add(
+                PracticeDimension(
+                    user_id=user.id,
+                    label=item["label"],
+                    confidence=item["confidence"],
+                    evidence=item.get("evidence", []),
+                )
             )
-        )
-    db.query(CareerSuggestion).filter(CareerSuggestion.user_id == user.id).delete()
-    for item in inference.get("career_suggestions", []):
-        db.add(
-            CareerSuggestion(
-                user_id=user.id,
-                title=item["title"],
-                confidence=item["confidence"],
-                reasoning=item["reasoning"],
+        db.query(CareerSuggestion).filter(CareerSuggestion.user_id == user.id).delete()
+        for item in inference.get("career_suggestions", []):
+            db.add(
+                CareerSuggestion(
+                    user_id=user.id,
+                    title=item["title"],
+                    confidence=item["confidence"],
+                    reasoning=item["reasoning"],
+                )
             )
-        )
+        cached_project_state["_career_fingerprint"] = fingerprint
+        cached_project_state["_recommendation_engine"] = _RECOMMENDATION_ENGINE_VERSION
+        portfolio_settings.project_learning_path_baseline = cached_project_state
 
     gamification = compute_xp_and_badges(summaries, context=_build_badge_context(db, user))
     upsert_badges(db, user.id, gamification.badges, preserve_achieved=False, clear_claimed_when_unachieved=True)
