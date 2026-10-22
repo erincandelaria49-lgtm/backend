@@ -578,13 +578,32 @@ def infer_project_learning_paths(
     logger.warning("LLM refiner runtime configuration: %s", llm_refiner.diagnostics())
     if not projects and llm_refiner.is_enabled():
         try:
-            refined_projects = llm_refiner.generate_project_learning_paths(
-                repos=repos,
-                practice_dimensions=practice_dimensions,
-                fallback_projects=[],
-                max_projects=len(repos) or 1,
-                personalization_key=_llm_personalization_key(personalization_key),
-            )
+            # Keep each Groq response small enough to remain valid JSON. A
+            # single request for many repositories can be truncated before it
+            # returns every project, so generate bounded repository batches.
+            batch_size = 5
+            refined_projects: list[dict] = []
+            for batch_start in range(0, len(repos), batch_size):
+                repo_batch = repos[batch_start : batch_start + batch_size]
+                batch_projects = llm_refiner.generate_project_learning_paths(
+                    repos=repo_batch,
+                    practice_dimensions=practice_dimensions,
+                    fallback_projects=[],
+                    max_projects=len(repo_batch) or 1,
+                    personalization_key=(
+                        f"{_llm_personalization_key(personalization_key)}:batch:{batch_start // batch_size}"
+                    ),
+                )
+                if not _project_paths_are_usable(batch_projects, repo_batch):
+                    logger.warning(
+                        "Groq project batch was incomplete: start=%s, expected=%s, received=%s",
+                        batch_start,
+                        len(repo_batch),
+                        len(batch_projects),
+                    )
+                    refined_projects = []
+                    break
+                refined_projects.extend(batch_projects)
             groq_projects_usable = _project_paths_are_usable(refined_projects, repos)
             logger.warning(
                 "Groq project-learning-path result: projects=%s, usable=%s, repositories=%s",
