@@ -582,7 +582,10 @@ def infer_project_learning_paths(
             # Keep each Groq response small enough to remain valid JSON. A
             # single request for many repositories can be truncated before it
             # returns every project, so generate bounded repository batches.
-            batch_size = 5
+            # Generate one repository per request. This keeps the prompt and
+            # JSON response small enough for Groq and prevents one repository
+            # from making the other repositories look generic after a 429.
+            batch_size = 1
             refined_projects: list[dict] = []
             for batch_start in range(0, len(repos), batch_size):
                 repo_batch = repos[batch_start : batch_start + batch_size]
@@ -602,6 +605,7 @@ def infer_project_learning_paths(
                     practice_dimensions=practice_dimensions,
                     fallback_projects=baseline_projects,
                     max_projects=len(repo_batch) or 1,
+                    max_steps_per_project=4,
                     personalization_key=(
                         f"{_llm_personalization_key(personalization_key)}:batch:{batch_start // batch_size}"
                     ),

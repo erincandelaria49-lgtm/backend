@@ -3752,6 +3752,7 @@ def claim_weekly_challenge(
 @router.get("/learning-path/projects/{username}", response_model=ProjectLearningPathResponse)
 def get_project_learning_paths(
     username: str,
+    repo: str | None = Query(default=None, description="Generate the path for one repository only"),
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.username == username).one_or_none()
@@ -3776,6 +3777,12 @@ def get_project_learning_paths(
         }
         for item in inference_summaries
     ]
+    if repo and repo.strip():
+        requested_repo = repo.strip().casefold()
+        selected = [item for item in summaries if str(item.get("name") or "").strip().casefold() == requested_repo]
+        if not selected:
+            raise HTTPException(status_code=404, detail="Repository not found in the student's synced repositories")
+        summaries = selected
     detected_skills = []
     project_keywords = []
     for repo in summaries:
@@ -3797,7 +3804,7 @@ def get_project_learning_paths(
     # A repository/profile-specific generation key prevents an older cached
     # path from being returned after GitHub data or the AI engine changes.
     generation_key = hashlib.sha256(
-        repr((summaries, practice_dimensions, "v8-ai-only-groq-fallback")).encode("utf-8")
+        repr((summaries, practice_dimensions, repo or "all", "v9-repository-grounded-single-repo-generation")).encode("utf-8")
     ).hexdigest()
 
     projects = infer_project_learning_paths(

@@ -337,6 +337,7 @@ def _extract_json(content: str) -> dict[str, Any]:
 
 
 def _compact_repo(repo: dict) -> dict:
+    code_signals = repo.get("code_signals") or {}
     return {
         "name": repo.get("name"),
         "description": repo.get("description"),
@@ -344,7 +345,15 @@ def _compact_repo(repo: dict) -> dict:
         "languages": repo.get("languages"),
         "topics": repo.get("topics"),
         "commit_count": repo.get("commit_count"),
-        "code_signals": repo.get("code_signals") or {},
+        "code_signals": code_signals,
+        "evidence_summary": {
+            "frameworks": code_signals.get("frameworks") or [],
+            "keywords": (code_signals.get("keywords") or [])[:12],
+            "testing_frameworks": code_signals.get("testing_frameworks") or [],
+            "testing": code_signals.get("testing") or {},
+            "devops": code_signals.get("devops") or {},
+            "architecture": code_signals.get("architecture") or [],
+        },
     }
 
 
@@ -544,6 +553,9 @@ def generate_project_learning_paths(
         '- Use the schema {"projects":[{"repo_name":"...","steps":[...]}]}.\n'
         f"- Return at most {max_projects} projects and at most {max_steps_per_project} steps per project.\n"
         "- Keep each project's steps tightly scoped to that repository.\n"
+        "- Use the repository evidence_summary as the source of truth. Mention the concrete detected framework, file signal, testing signal, or deployment signal that caused each recommendation.\n"
+        "- Do not recommend adding tests, databases, authentication, or deployment when the evidence already shows that capability; recommend the next missing quality or reliability improvement instead.\n"
+        "- Every step must contain a short reason that starts with or clearly states 'Recommended because' and names the inspected evidence or missing evidence.\n"
         "- Treat practice dimensions as FLAN-T5 score signals: lower-confidence areas should influence stage priority, but repo evidence decides the actual task.\n"
         "- Avoid similar-looking stages across repositories. If repos share technologies, vary the milestone angle using workflow, quality, data, UX, security, deployment, or documentation evidence.\n"
         "- Every step must include: title, description, reason, type, difficulty, tags, evidence, ai_explanation, progression_logic.\n"
@@ -566,7 +578,7 @@ def generate_project_learning_paths(
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=3600,
+            max_tokens=1900 if max_projects == 1 else 3000,
         )
         parsed = _extract_json(content)
     except Exception as exc:
