@@ -368,6 +368,8 @@ class LearningPathStepOut(BaseModel):
     title: str
     description: str | None = None
     reason: str
+    task_requirement: str | None = None
+    required_proof: list[str] = Field(default_factory=list)
     type: str | None = None
     tag: str | None = None
     dimension_key: str | None = None

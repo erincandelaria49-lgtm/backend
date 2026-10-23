@@ -455,7 +455,7 @@ def infer_project_learning_paths(
         "Schema: "
         '{"projects":[{"repo_name":"Repo name","steps":[{"title":"Task title","reason":"Why this helps",'
         '"tags":["testing"],"difficulty":"Beginner","reward_xp":100,"evidence":["repo signal"]}]}]}.\n'
-        "Provide 3 to 5 steps per project. Make steps specific to the repo signals. Every step must include 2 to 4 credible, directly relevant resources under courses, tools, or documentation. Prefer official documentation and established learning platforms; do not invent URLs.\n"
+        "Provide 3 to 5 steps per project. Make steps specific to the repo signals. Every step must include task_requirement, required_proof with 3 to 5 concrete completion artifacts, and 2 to 4 credible directly relevant resources under courses, tools, or documentation. Prefer official documentation and established learning platforms; do not invent URLs.\n"
         f"Detected skills: {json.dumps(detected_skills[:12])}\n"
         f"Project keywords: {json.dumps(project_keywords[:20])}\n"
         f"Practice dimensions: {json.dumps(practice_dimensions)}\n"

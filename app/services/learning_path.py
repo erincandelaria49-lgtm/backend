@@ -1241,6 +1241,11 @@ def _normalize_steps(payload: dict, max_steps: int = 8, enforce_contract: bool =
         description = (item.get("description") or item.get("reason") or "").strip()
         if not title or not description:
             continue
+        task_requirement = str(item.get("task_requirement") or description).strip()
+        required_proof_raw = item.get("required_proof") or item.get("proof_requirements") or []
+        if isinstance(required_proof_raw, str):
+            required_proof_raw = [required_proof_raw]
+        required_proof = [str(proof).strip() for proof in required_proof_raw if str(proof).strip()] if isinstance(required_proof_raw, list) else []
         evidence = item.get("evidence") or []
         if isinstance(evidence, str):
             evidence = [evidence]
@@ -1305,6 +1310,8 @@ def _normalize_steps(payload: dict, max_steps: int = 8, enforce_contract: bool =
                 "title": title,
                 "description": description,
                 "reason": description,
+                "task_requirement": task_requirement,
+                "required_proof": required_proof[:6],
                 "tag": (item.get("tag") or "").strip() or None,
                 "evidence": cleaned[:3] if cleaned else None,
                 "difficulty": difficulty,
