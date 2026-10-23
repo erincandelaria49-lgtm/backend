@@ -573,8 +573,9 @@ def infer_project_learning_paths(
             logger.warning("FLAN-T5 project learning-path output was incomplete; trying Groq LLM.")
             projects = []
 
-    # Groq is the only fallback. It receives the same repository-specific
-    # evidence and must generate a complete path; no rule-based path is used.
+    # Build a repository-specific baseline first. Groq refines these paths when
+    # available, while the baseline keeps every repository usable during a
+    # rate limit or an incomplete model response.
     logger.warning("LLM refiner runtime configuration: %s", llm_refiner.diagnostics())
     if not projects and llm_refiner.is_enabled():
         try:
@@ -585,10 +586,21 @@ def infer_project_learning_paths(
             refined_projects: list[dict] = []
             for batch_start in range(0, len(repos), batch_size):
                 repo_batch = repos[batch_start : batch_start + batch_size]
+                baseline_projects = [
+                    {
+                        "repo_name": str(repo.get("name") or "Unnamed repo"),
+                        "steps": _rule_based_project_path(
+                            repo,
+                            personalization_key=f"{personalization_key}:batch:{batch_start // batch_size}",
+                            practice_dimensions=practice_dimensions,
+                        ),
+                    }
+                    for repo in repo_batch
+                ]
                 batch_projects = llm_refiner.generate_project_learning_paths(
                     repos=repo_batch,
                     practice_dimensions=practice_dimensions,
-                    fallback_projects=[],
+                    fallback_projects=baseline_projects,
                     max_projects=len(repo_batch) or 1,
                     personalization_key=(
                         f"{_llm_personalization_key(personalization_key)}:batch:{batch_start // batch_size}"
@@ -619,7 +631,16 @@ def infer_project_learning_paths(
                         len(repo_batch),
                         len(valid_batch_projects),
                     )
+                valid_names = {
+                    str(project.get("repo_name") or "").strip().lower()
+                    for project in valid_batch_projects
+                }
                 refined_projects.extend(valid_batch_projects)
+                refined_projects.extend(
+                    project
+                    for project in baseline_projects
+                    if str(project.get("repo_name") or "").strip().lower() not in valid_names
+                )
             # A partial but valid result is preferable to turning the entire
             # endpoint into a 503 when one Groq response is incomplete.
             groq_projects_usable = bool(refined_projects)
