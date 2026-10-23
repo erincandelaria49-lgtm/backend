@@ -594,17 +594,35 @@ def infer_project_learning_paths(
                         f"{_llm_personalization_key(personalization_key)}:batch:{batch_start // batch_size}"
                     ),
                 )
-                if not _project_paths_are_usable(batch_projects, repo_batch):
+                # Keep valid projects from this batch even when Groq omits or
+                # slightly mangles one repository. Previously one bad batch
+                # cleared every successful batch and caused a 503 for the
+                # whole endpoint.
+                valid_batch_projects = [
+                    project
+                    for project in batch_projects
+                    if (
+                        isinstance(project, dict)
+                        and str(project.get("repo_name") or "").strip().lower()
+                        in {
+                            str(repo.get("name") or "").strip().lower()
+                            for repo in repo_batch
+                            if str(repo.get("name") or "").strip()
+                        }
+                        and _learning_steps_are_usable(project.get("steps") or [], min_steps=3)
+                    )
+                ]
+                if len(valid_batch_projects) != len(repo_batch):
                     logger.warning(
                         "Groq project batch was incomplete: start=%s, expected=%s, received=%s",
                         batch_start,
                         len(repo_batch),
-                        len(batch_projects),
+                        len(valid_batch_projects),
                     )
-                    refined_projects = []
-                    break
-                refined_projects.extend(batch_projects)
-            groq_projects_usable = _project_paths_are_usable(refined_projects, repos)
+                refined_projects.extend(valid_batch_projects)
+            # A partial but valid result is preferable to turning the entire
+            # endpoint into a 503 when one Groq response is incomplete.
+            groq_projects_usable = bool(refined_projects)
             logger.warning(
                 "Groq project-learning-path result: projects=%s, usable=%s, repositories=%s",
                 len(refined_projects),
