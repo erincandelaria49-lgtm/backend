@@ -367,6 +367,7 @@ def _compact_step(step: dict) -> dict:
         "evidence": step.get("evidence") or [],
         "progression_logic": step.get("progression_logic"),
         "ai_explanation": step.get("ai_explanation"),
+        "resources": step.get("resources") or {},
     }
 
 
@@ -477,7 +478,8 @@ def generate_learning_path_steps(
         "- Keep the learning path practical, repository-specific, and outcome-based.\n"
         "- Treat practice dimensions as FLAN-T5 score signals: prioritize lower-confidence areas and explain how stronger areas support the next step.\n"
         "- Avoid near-duplicate steps. Vary titles, tags, and progression logic across the path instead of repeating the same testing/deployment checklist.\n"
-        "- Every step must include: title, description, reason, type, difficulty, tags, evidence, ai_explanation, progression_logic.\n"
+        "- Every step must include: title, description, reason, type, difficulty, tags, evidence, ai_explanation, progression_logic, and resources.\n"
+        "- resources must contain 2 to 4 credible links directly relevant to that step, using courses, tools, and documentation arrays. Prefer official documentation and established learning platforms; do not invent URLs.\n"
         "- Allowed type values: Project, Skill, Certification, Course.\n"
         "- Allowed difficulty values: Beginner, Intermediate, Advanced.\n"
         "- Mention at least one real repository name in each step when available.\n"
@@ -558,7 +560,8 @@ def generate_project_learning_paths(
         "- Every step must contain a short reason that starts with or clearly states 'Recommended because' and names the inspected evidence or missing evidence.\n"
         "- Treat practice dimensions as FLAN-T5 score signals: lower-confidence areas should influence stage priority, but repo evidence decides the actual task.\n"
         "- Avoid similar-looking stages across repositories. If repos share technologies, vary the milestone angle using workflow, quality, data, UX, security, deployment, or documentation evidence.\n"
-        "- Every step must include: title, description, reason, type, difficulty, tags, evidence, ai_explanation, progression_logic.\n"
+        "- Every step must include: title, description, reason, type, difficulty, tags, evidence, ai_explanation, progression_logic, and resources.\n"
+        "- resources must contain 2 to 4 credible links directly relevant to that repository-specific step, using courses, tools, and documentation arrays. Prefer official documentation and established learning platforms; do not invent URLs.\n"
         "- Allowed type values: Project, Skill, Certification, Course.\n"
         "- Allowed difficulty values: Beginner, Intermediate, Advanced.\n"
         "- Do not invent repository names.\n\n"

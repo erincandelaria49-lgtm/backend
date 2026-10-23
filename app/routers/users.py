@@ -3804,7 +3804,7 @@ def get_project_learning_paths(
     # A repository/profile-specific generation key prevents an older cached
     # path from being returned after GitHub data or the AI engine changes.
     generation_key = hashlib.sha256(
-        repr((summaries, practice_dimensions, repo or "all", "v10-repository-grounded-single-repo-generation")).encode("utf-8")
+        repr((summaries, practice_dimensions, repo or "all", "v11-llm-resources-repository-grounded-generation")).encode("utf-8")
     ).hexdigest()
 
     projects = infer_project_learning_paths(
