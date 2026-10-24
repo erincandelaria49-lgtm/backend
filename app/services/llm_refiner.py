@@ -625,6 +625,121 @@ def generate_project_learning_paths(
     return normalized_projects
 
 
+CERTIFICATE_COMPLEMENT_GROUPS: dict[str, list[str]] = {
+    "backend": ["database", "frontend", "qa", "devops", "cloud"],
+    "frontend": ["backend", "database", "qa", "cloud"],
+    "database": ["backend", "frontend", "data", "devops"],
+    "data": ["database", "ai", "backend"],
+    "ai": ["data", "backend", "database"],
+    "qa": ["backend", "frontend", "devops"],
+    "devops": ["cloud", "backend", "security", "qa"],
+    "cloud": ["devops", "backend", "security"],
+    "security": ["backend", "devops", "database"],
+    "networking": ["devops", "cloud", "backend"],
+}
+
+
+def _fallback_certificate_suggestions(
+    *,
+    learning_path_steps: list[dict],
+    project_learning_paths: list[dict] | None = None,
+    career_suggestions: list[dict] | None = None,
+    max_items: int = 6,
+) -> list[dict[str, Any]]:
+    """Return diverse certificate suggestions when the optional LLM is unavailable."""
+    if max_items <= 0:
+        return []
+
+    source = json.dumps(
+        {
+            "learning_path": learning_path_steps,
+            "project_paths": project_learning_paths or [],
+            "careers": career_suggestions or [],
+        },
+        ensure_ascii=False,
+    ).lower()
+    group_terms = {
+        "frontend": ["frontend", "front-end", "html", "css", "react", "javascript", "ui"],
+        "backend": ["backend", "back-end", "api", "server", "fastapi", "django", "node", "python"],
+        "database": ["database", "sql", "postgres", "mysql", "mongodb", "nosql", "crud"],
+        "data": ["data", "pandas", "analytics", "statistics"],
+        "ai": ["ai", "machine learning", "ml", "model", "nlp"],
+        "qa": ["qa", "quality", "test", "testing", "pytest", "playwright"],
+        "devops": ["devops", "docker", "deploy", "deployment", "ci/cd", "pipeline"],
+        "cloud": ["cloud", "aws", "azure", "railway", "hosting"],
+        "security": ["security", "auth", "oauth", "jwt"],
+        "networking": ["network", "tcp", "ip", "socket"],
+    }
+    group_scores = {group: sum(source.count(term) for term in terms) for group, terms in group_terms.items()}
+    active_groups = [group for group, score in group_scores.items() if score > 0]
+    primary_group = max(group_scores, key=group_scores.get, default="backend")
+    if not group_scores.get(primary_group):
+        primary_group = "backend"
+
+    target_groups: list[str] = [primary_group]
+    for group in CERTIFICATE_COMPLEMENT_GROUPS.get(primary_group, []):
+        if group not in target_groups:
+            target_groups.append(group)
+    for group in sorted(active_groups, key=lambda item: group_scores[item], reverse=True):
+        if group not in target_groups:
+            target_groups.append(group)
+
+    def score(item: dict[str, Any]) -> tuple[int, int]:
+        groups = set(item.get("groups") or [])
+        token_score = sum(source.count(str(token).lower()) for token in (item.get("match_tokens") or []))
+        group_score = sum(group_scores.get(group, 0) for group in groups)
+        if primary_group in groups:
+            group_score += 100
+        for index, group in enumerate(target_groups):
+            if group in groups:
+                group_score += max(0, 30 - index)
+        return (token_score + group_score, int(item.get("reward_xp") or 0))
+
+    ranked = sorted(CERTIFICATE_CATALOG, key=score, reverse=True)
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    for target_group in target_groups:
+        candidates = [
+            item for item in ranked
+            if item["id"] not in selected_ids and target_group in (item.get("groups") or [])
+        ]
+        if not candidates:
+            continue
+        candidates.sort(
+            key=lambda item: (
+                1 if set(item.get("groups") or []) == {target_group} else 0,
+                score(item),
+            ),
+            reverse=True,
+        )
+        item = dict(candidates[0])
+        item["reasoning"] = (
+            f"Primary recommendation for the {target_group} learning path. "
+            "It directly strengthens the skills shown in the current study plan and repositories."
+            if not selected
+            else f"Supporting recommendation for the {target_group} area. "
+            "It complements the main path and helps build a more complete, practical profile."
+        )
+        selected.append(item)
+        selected_ids.add(item["id"])
+        if len(selected) >= max_items:
+            return selected
+
+    for item in ranked:
+        if len(selected) >= max_items:
+            break
+        if item["id"] in selected_ids:
+            continue
+        fallback = dict(item)
+        fallback["reasoning"] = (
+            "Additional recommendation based on the student's repositories and career direction. "
+            "It broadens the learning path without replacing the primary track."
+        )
+        selected.append(fallback)
+        selected_ids.add(item["id"])
+    return selected
+
+
 def generate_certificate_suggestions(
     *,
     learning_path_steps: list[dict],
@@ -632,8 +747,17 @@ def generate_certificate_suggestions(
     career_suggestions: list[dict] | None = None,
     max_items: int = 6,
 ) -> list[dict[str, Any]]:
-    if not learning_path_steps or not _enabled():
+    if not learning_path_steps:
         return []
+
+    fallback_results = _fallback_certificate_suggestions(
+        learning_path_steps=learning_path_steps,
+        project_learning_paths=project_learning_paths,
+        career_suggestions=career_suggestions,
+        max_items=max_items,
+    )
+    if not _enabled():
+        return fallback_results
 
     catalog = [
         {
@@ -673,6 +797,8 @@ def generate_certificate_suggestions(
         f"- Return at most {max_items} items.\n"
         "- Only use IDs from the provided catalog.\n"
         "- Prefer items that directly strengthen the student's current learning path and repo gaps.\n"
+        "- Return one primary recommendation for the main learning path, then complementary recommendations from frontend, SQL/database, full-stack, QA, DevOps/cloud, data, or AI when supported by the evidence.\n"
+        "- Do not return only the same category when complementary skills would make the student's profile more practical.\n"
         "- Keep reasoning to 1 or 2 concise sentences and ground it in repo or learning-path evidence.\n"
         "- Do not recommend duplicate or near-duplicate tracks unless they serve clearly different goals.\n\n"
         f"Learning path steps: {json.dumps(compact_steps, ensure_ascii=False)}\n"
@@ -695,11 +821,11 @@ def generate_certificate_suggestions(
         parsed = _extract_json(content)
     except Exception as exc:
         logger.info("LLM certificate suggestions skipped after request/parse failure: %s", str(exc)[:240])
-        return []
+        return fallback_results
 
     items = parsed.get("items") or []
     if not isinstance(items, list):
-        return []
+        return fallback_results
 
     catalog_map = {item["id"]: item for item in CERTIFICATE_CATALOG}
     results: list[dict[str, Any]] = []
@@ -715,6 +841,15 @@ def generate_certificate_suggestions(
         base["reasoning"] = reasoning or "Aligned with the current learning path."
         results.append(base)
         seen.add(item_id)
+    if not results:
+        return fallback_results
+    for fallback in fallback_results:
+        if len(results) >= max_items:
+            break
+        if fallback["id"] in seen:
+            continue
+        results.append(fallback)
+        seen.add(fallback["id"])
     return results
 
 
