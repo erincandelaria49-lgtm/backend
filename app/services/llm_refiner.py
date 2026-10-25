@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Any
 
 import requests
@@ -10,6 +11,9 @@ from app.core.config import settings
 from app.services.learning_path import _normalize_steps
 
 logger = logging.getLogger(__name__)
+
+_key_rotation_lock = threading.Lock()
+_next_key_index = 0
 
 CERTIFICATE_CATALOG: list[dict[str, Any]] = [
     {
@@ -254,6 +258,17 @@ def diagnostics() -> dict[str, object]:
     }
 
 
+def _rotated_api_keys(keys: list[str]) -> list[str]:
+    """Start each request with the next configured key, then fail over safely."""
+    global _next_key_index
+    if len(keys) <= 1:
+        return keys
+    with _key_rotation_lock:
+        start = _next_key_index % len(keys)
+        _next_key_index = (_next_key_index + 1) % len(keys)
+    return keys[start:] + keys[:start]
+
+
 def _chat_completion(messages: list[dict[str, str]], max_tokens: int = 1400) -> str:
     if not _enabled():
         raise RuntimeError("LLM refiner is disabled or missing API key.")
@@ -283,7 +298,7 @@ def _chat_completion(messages: list[dict[str, str]], max_tokens: int = 1400) -> 
         payload["response_format"] = {"type": "json_object"}
 
     last_error: Exception | None = None
-    keys = _api_keys()
+    keys = _rotated_api_keys(_api_keys())
     for index, api_key in enumerate(keys, start=1):
         try:
             response = requests.post(
