@@ -3179,6 +3179,23 @@ def delete_project_stage_progress_update(
     else:
         proof_counts.pop(stage_title, None)
 
+    # Deleting the last progress update removes the stage's saved evidence.
+    # Reset the checklist/status as well so a refresh cannot resurrect stale
+    # proof or leave the stage marked as ongoing.
+    final_proof_items = stage_updates[stage_title].get("final_proof_items")
+    if not progress_entries and not (isinstance(final_proof_items, list) and final_proof_items):
+        stage_status_overrides = project_entry.get("stage_status_overrides")
+        if not isinstance(stage_status_overrides, dict):
+            stage_status_overrides = {}
+        stage_status_overrides[stage_title] = "not_started"
+        project_entry["stage_status_overrides"] = stage_status_overrides
+
+        stage_checks = project_entry.get("stage_checks")
+        if not isinstance(stage_checks, dict):
+            stage_checks = {}
+        stage_checks[stage_title] = []
+        project_entry["stage_checks"] = stage_checks
+
     project_entry["stage_progress_updates"] = stage_updates
     project_entry["stage_proof_counts"] = proof_counts
     project_baseline[baseline_key] = project_entry
