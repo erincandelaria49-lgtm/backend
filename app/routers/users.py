@@ -2601,15 +2601,6 @@ def update_project_stage_status(
     saved_checks = None
     if payload.checks is not None:
         saved_checks = [bool(item) for item in payload.checks]
-        if stage_has_progress_proof and any(
-            (existing_checks[index] if index < len(existing_checks) else False)
-            and not (saved_checks[index] if index < len(saved_checks) else False)
-            for index in range(max(len(existing_checks), len(saved_checks)))
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="Delete the saved progress proof for this stage before unchecking its completed outputs",
-            )
         stage_checks = project_entry.get("stage_checks")
         if not isinstance(stage_checks, dict):
             stage_checks = {}
