@@ -3807,13 +3807,37 @@ def get_project_learning_paths(
         repr((summaries, practice_dimensions, repo or "all", "v12-llm-grounded-task-proof-resource-generation")).encode("utf-8")
     ).hexdigest()
 
-    projects = infer_project_learning_paths(
-        summaries,
-        detected_skills=detected_skills,
-        project_keywords=project_keywords,
-        practice_dimensions=practice_dimensions,
-        personalization_key=username,
-    )
+    # Reuse repository paths when the repository/profile generation key is
+    # unchanged. This prevents every page refresh from calling FLAN-T5/Groq.
+    cached_projects: list[dict] = []
+    cache_is_complete = bool(summaries)
+    for summary in summaries:
+        cached_key = _project_baseline_key(
+            dict(portfolio_settings.project_learning_path_baseline or {}),
+            str(summary.get("name") or ""),
+        )
+        cached_entry = (portfolio_settings.project_learning_path_baseline or {}).get(cached_key)
+        cached_steps = cached_entry.get("steps") if isinstance(cached_entry, dict) else None
+        if (
+            not isinstance(cached_entry, dict)
+            or not isinstance(cached_steps, list)
+            or not cached_steps
+            or str(cached_entry.get("generation_key") or "") != generation_key
+        ):
+            cache_is_complete = False
+            break
+        cached_projects.append({"repo_name": summary.get("name"), "steps": cached_steps})
+
+    if cache_is_complete:
+        projects = cached_projects
+    else:
+        projects = infer_project_learning_paths(
+            summaries,
+            detected_skills=detected_skills,
+            project_keywords=project_keywords,
+            practice_dimensions=practice_dimensions,
+            personalization_key=username,
+        )
     if not projects:
         raise HTTPException(
             status_code=503,
@@ -3948,6 +3972,7 @@ def get_certificate_suggestions(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    portfolio_settings = _get_or_create_portfolio_settings(db, user.id)
     repos = db.query(Repo).filter(Repo.user_id == user.id).all()
     practice_rows = db.query(PracticeDimension).filter(PracticeDimension.user_id == user.id).all()
     career_rows = (
@@ -3992,23 +4017,51 @@ def get_certificate_suggestions(
         for item in career_rows
     ]
 
-    learning_steps = infer_learning_path(
-        summaries,
-        detected_skills=detected_skills,
-        project_keywords=project_keywords,
-        practice_dimensions=practice_dimensions,
+    certificate_generation_key = hashlib.sha256(
+        repr((summaries, practice_dimensions, career_suggestions, "v2-certificate-cache")).encode("utf-8")
+    ).hexdigest()
+    learning_cache = portfolio_settings.learning_path_baseline
+    cached_certificate_items = (
+        learning_cache.get("certificate_suggestions")
+        if isinstance(learning_cache, dict)
+        else None
     )
-    project_paths = infer_project_learning_paths(
-        summaries,
-        detected_skills=detected_skills,
-        project_keywords=project_keywords,
-        practice_dimensions=practice_dimensions,
+    cached_certificate_key = (
+        str(learning_cache.get("certificate_generation_key") or "")
+        if isinstance(learning_cache, dict)
+        else ""
     )
-    items = llm_refiner.generate_certificate_suggestions(
-        learning_path_steps=learning_steps,
-        project_learning_paths=project_paths,
-        career_suggestions=career_suggestions,
-    )
+    if (
+        cached_certificate_key == certificate_generation_key
+        and isinstance(cached_certificate_items, list)
+    ):
+        # Certificate recommendations are already generated for this exact
+        # repository/profile state; do not spend FLAN/Groq tokens again.
+        items = [dict(item) for item in cached_certificate_items if isinstance(item, dict)]
+    else:
+        learning_steps = infer_learning_path(
+            summaries,
+            detected_skills=detected_skills,
+            project_keywords=project_keywords,
+            practice_dimensions=practice_dimensions,
+        )
+        project_paths = infer_project_learning_paths(
+            summaries,
+            detected_skills=detected_skills,
+            project_keywords=project_keywords,
+            practice_dimensions=practice_dimensions,
+        )
+        items = llm_refiner.generate_certificate_suggestions(
+            learning_path_steps=learning_steps,
+            project_learning_paths=project_paths,
+            career_suggestions=career_suggestions,
+        )
+        updated_learning_cache = dict(learning_cache) if isinstance(learning_cache, dict) else {}
+        updated_learning_cache["certificate_generation_key"] = certificate_generation_key
+        updated_learning_cache["certificate_suggestions"] = items
+        portfolio_settings.learning_path_baseline = updated_learning_cache
+        flag_modified(portfolio_settings, "learning_path_baseline")
+        db.commit()
     locked_rows = (
         db.query(CertificateRecord)
         .filter(
