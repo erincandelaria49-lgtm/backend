@@ -1530,7 +1530,6 @@ def get_portfolio(username: str, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
     settings = db.query(PortfolioSettings).filter(PortfolioSettings.user_id == user.id).one_or_none()
     if not settings or not settings.is_public:
         raise HTTPException(status_code=404, detail="Portfolio not public")
@@ -1695,6 +1694,7 @@ def _invalidate_learning_path_caches(portfolio_settings: PortfolioSettings) -> N
     """Invalidate generated paths while preserving student progress evidence."""
     portfolio_settings.learning_path_baseline = []
     state = dict(portfolio_settings.project_learning_path_baseline or {})
+    state.pop("_certificate_suggestions", None)
     for key, value in list(state.items()):
         if str(key).startswith("_") or not isinstance(value, dict):
             continue
@@ -1939,7 +1939,9 @@ def get_learning_path(
             "skill_gaps": skill_gaps,
         }
 
-    if cached_steps and set(cached_signals_list) == set(signals):
+    # A saved path is authoritative until the student explicitly recomputes.
+    # Repository changes must not silently replace the student's generated path.
+    if cached_steps:
         steps = cached_steps
     else:
         try:
@@ -2601,15 +2603,6 @@ def update_project_stage_status(
     saved_checks = None
     if payload.checks is not None:
         saved_checks = [bool(item) for item in payload.checks]
-        if stage_has_progress_proof and any(
-            (existing_checks[index] if index < len(existing_checks) else False)
-            and not (saved_checks[index] if index < len(saved_checks) else False)
-            for index in range(max(len(existing_checks), len(saved_checks)))
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="Delete the saved progress proof for this stage before unchecking its completed outputs",
-            )
         stage_checks = project_entry.get("stage_checks")
         if not isinstance(stage_checks, dict):
             stage_checks = {}
@@ -3187,6 +3180,23 @@ def delete_project_stage_progress_update(
         proof_counts[stage_title] = saved_progress_proof_count
     else:
         proof_counts.pop(stage_title, None)
+
+    # Deleting the last progress update removes the stage's saved evidence.
+    # Reset the checklist/status as well so a refresh cannot resurrect stale
+    # proof or leave the stage marked as ongoing.
+    final_proof_items = stage_updates[stage_title].get("final_proof_items")
+    if not progress_entries and not (isinstance(final_proof_items, list) and final_proof_items):
+        stage_status_overrides = project_entry.get("stage_status_overrides")
+        if not isinstance(stage_status_overrides, dict):
+            stage_status_overrides = {}
+        stage_status_overrides[stage_title] = "not_started"
+        project_entry["stage_status_overrides"] = stage_status_overrides
+
+        stage_checks = project_entry.get("stage_checks")
+        if not isinstance(stage_checks, dict):
+            stage_checks = {}
+        stage_checks[stage_title] = []
+        project_entry["stage_checks"] = stage_checks
 
     project_entry["stage_progress_updates"] = stage_updates
     project_entry["stage_proof_counts"] = proof_counts
@@ -3807,19 +3817,40 @@ def get_project_learning_paths(
         repr((summaries, practice_dimensions, repo or "all", "v12-llm-grounded-task-proof-resource-generation")).encode("utf-8")
     ).hexdigest()
 
-    projects = infer_project_learning_paths(
+    project_baseline = dict(portfolio_settings.project_learning_path_baseline or {})
+    cached_projects: list[dict] = []
+    for repo in summaries:
+        repo_name = str(repo.get("name") or "Unnamed repo")
+        cached_entry = project_baseline.get(_project_baseline_key(project_baseline, repo_name))
+        if isinstance(cached_entry, dict) and isinstance(cached_entry.get("steps"), list) and cached_entry.get("steps"):
+            cached_projects.append({"repo_name": repo_name, "steps": cached_entry["steps"]})
+
+    # Use the student's saved paths on ordinary GETs. Re-generation is done by
+    # the explicit recompute flow, which invalidates these entries.
+    projects = cached_projects or infer_project_learning_paths(
         summaries,
         detected_skills=detected_skills,
         project_keywords=project_keywords,
         practice_dimensions=practice_dimensions,
         personalization_key=username,
     )
-    if not projects:
-        raise HTTPException(
-            status_code=503,
-            detail="AI learning-path generation is temporarily unavailable. Please try again.",
-        )
-    project_baseline = dict(portfolio_settings.project_learning_path_baseline or {})
+    if not projects and isinstance(project_baseline, dict):
+        cached_projects: list[dict] = []
+        for repo_name, baseline_entry in project_baseline.items():
+            if not isinstance(baseline_entry, dict):
+                continue
+            cached_steps = baseline_entry.get("steps")
+            if not isinstance(cached_steps, list) or not cached_steps:
+                continue
+            cached_projects.append(
+                {
+                    "repo_name": str(repo_name or "Unnamed repo"),
+                    "steps": cached_steps,
+                    "progress_percent": 0,
+                }
+            )
+        if cached_projects:
+            projects = cached_projects
 
     projects_with_progress = []
 
@@ -3884,11 +3915,7 @@ def get_project_learning_paths(
             steps = [{**step, "status": "done"} for step in (cached_steps or project.get("steps") or [])]
             progress_percent = 100 if steps else 0
         else:
-            if (
-                cached_steps
-                and set(cached_signals_list) == set(repo_signals)
-                and str(baseline_entry.get("generation_key") or "") == generation_key
-            ):
+            if cached_steps:
                 steps_source = cached_steps
             else:
                 steps_source = project.get("steps") or []
@@ -3948,6 +3975,7 @@ def get_certificate_suggestions(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    portfolio_settings = _get_or_create_portfolio_settings(db, user.id)
     repos = db.query(Repo).filter(Repo.user_id == user.id).all()
     practice_rows = db.query(PracticeDimension).filter(PracticeDimension.user_id == user.id).all()
     career_rows = (
@@ -3992,23 +4020,50 @@ def get_certificate_suggestions(
         for item in career_rows
     ]
 
-    learning_steps = infer_learning_path(
-        summaries,
-        detected_skills=detected_skills,
-        project_keywords=project_keywords,
-        practice_dimensions=practice_dimensions,
+    certificate_generation_key = hashlib.sha256(
+        repr((summaries, practice_dimensions, career_suggestions, "v2-certificate-cache")).encode("utf-8")
+    ).hexdigest()
+    learning_cache = portfolio_settings.learning_path_baseline
+    cached_certificate_items = (
+        learning_cache.get("certificate_suggestions")
+        if isinstance(learning_cache, dict)
+        else None
     )
-    project_paths = infer_project_learning_paths(
-        summaries,
-        detected_skills=detected_skills,
-        project_keywords=project_keywords,
-        practice_dimensions=practice_dimensions,
+    cached_certificate_key = (
+        str(learning_cache.get("certificate_generation_key") or "")
+        if isinstance(learning_cache, dict)
+        else ""
     )
-    items = llm_refiner.generate_certificate_suggestions(
-        learning_path_steps=learning_steps,
-        project_learning_paths=project_paths,
-        career_suggestions=career_suggestions,
-    )
+    if isinstance(cached_certificate_items, list):
+        # Certificate recommendations are already generated for this exact
+        # student; do not spend FLAN/Groq tokens again until manual recompute.
+        items = [dict(item) for item in cached_certificate_items if isinstance(item, dict)]
+    else:
+        learning_steps = infer_learning_path(
+            summaries,
+            detected_skills=detected_skills,
+            project_keywords=project_keywords,
+            practice_dimensions=practice_dimensions,
+            personalization_key=username,
+        )
+        project_paths = infer_project_learning_paths(
+            summaries,
+            detected_skills=detected_skills,
+            project_keywords=project_keywords,
+            practice_dimensions=practice_dimensions,
+            personalization_key=username,
+        )
+        items = llm_refiner.generate_certificate_suggestions(
+            learning_path_steps=learning_steps,
+            project_learning_paths=project_paths,
+            career_suggestions=career_suggestions,
+        )
+        updated_learning_cache = dict(learning_cache) if isinstance(learning_cache, dict) else {}
+        updated_learning_cache["certificate_generation_key"] = certificate_generation_key
+        updated_learning_cache["certificate_suggestions"] = items
+        portfolio_settings.learning_path_baseline = updated_learning_cache
+        flag_modified(portfolio_settings, "learning_path_baseline")
+        db.commit()
     locked_rows = (
         db.query(CertificateRecord)
         .filter(
