@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Any
 
 import requests
@@ -10,6 +11,10 @@ from app.core.config import settings
 from app.services.learning_path import _normalize_steps
 
 logger = logging.getLogger(__name__)
+
+_LLM_REQUEST_LIMITER = threading.BoundedSemaphore(2)
+_KEY_ROTATION_LOCK = threading.Lock()
+_KEY_ROTATION_INDEX = 0
 
 CERTIFICATE_CATALOG: list[dict[str, Any]] = [
     {
@@ -219,6 +224,8 @@ def _api_keys() -> list[str]:
     keys = [
         settings.llm_refiner_api_key,
         settings.llm_refiner_api_key_2,
+        settings.llm_refiner_api_key_3,
+        settings.llm_refiner_api_key_4,
     ]
     cleaned: list[str] = []
     for key in keys:
@@ -226,6 +233,17 @@ def _api_keys() -> list[str]:
         if value and value not in cleaned:
             cleaned.append(value)
     return cleaned
+
+
+def _rotated_api_keys(keys: list[str]) -> list[str]:
+    """Start each request with the next configured key, then fail over."""
+    global _KEY_ROTATION_INDEX
+    if len(keys) < 2:
+        return keys
+    with _KEY_ROTATION_LOCK:
+        start = _KEY_ROTATION_INDEX % len(keys)
+        _KEY_ROTATION_INDEX = (start + 1) % len(keys)
+    return keys[start:] + keys[:start]
 
 
 def _enabled() -> bool:
@@ -283,18 +301,19 @@ def _chat_completion(messages: list[dict[str, str]], max_tokens: int = 1400) -> 
         payload["response_format"] = {"type": "json_object"}
 
     last_error: Exception | None = None
-    keys = _api_keys()
+    keys = _rotated_api_keys(_api_keys())
     for index, api_key in enumerate(keys, start=1):
         try:
-            response = requests.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=45,
-            )
+            with _LLM_REQUEST_LIMITER:
+                response = requests.post(
+                    f"{base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=45,
+                )
             response.raise_for_status()
             payload = response.json()
             message = payload["choices"][0]["message"]

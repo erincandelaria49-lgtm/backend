@@ -14,6 +14,7 @@ from app.routers import auth, users, admin, analytics
 from app.routers import login_analytics
 from app.services.badge_sync import repair_badge_duplicates
 from app.services import flan_t5
+from app.services import llm_refiner
 
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,17 @@ app.include_router(login_analytics.router)
 
 @app.on_event("startup")
 def startup_event():
+    diagnostics = llm_refiner.diagnostics()
+    print(f"AI_RUNTIME_GROQ={diagnostics}", flush=True)
+    print(
+        "AI_RUNTIME_FLAN_T5="
+        f"{{'model_configured': {bool(settings.flan_t5_model)}, "
+        f"'model': '{settings.flan_t5_model or ''}', "
+        f"'hf_space_configured': {bool(settings.hf_space_url)}, "
+        f"'hf_token_configured': {bool(settings.hf_token)}, "
+        f"'hf_endpoint': '{settings.hf_endpoint_url}'}}",
+        flush=True,
+    )
     Thread(target=_bootstrap_schema_background, daemon=True).start()
     Thread(target=_repair_badges_background, daemon=True).start()
     if settings.flan_t5_model and _should_warmup_flan_t5():
