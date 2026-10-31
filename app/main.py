@@ -14,6 +14,7 @@ from app.routers import auth, users, admin, analytics
 from app.routers import login_analytics
 from app.services.badge_sync import repair_badge_duplicates
 from app.services import flan_t5
+from app.services import llm_refiner
 
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,7 @@ app.include_router(login_analytics.router)
 
 @app.on_event("startup")
 def startup_event():
+    logger.info("LLM refiner runtime configuration: %s", llm_refiner.diagnostics())
     Thread(target=_bootstrap_schema_background, daemon=True).start()
     Thread(target=_repair_badges_background, daemon=True).start()
     if settings.flan_t5_model and _should_warmup_flan_t5():
