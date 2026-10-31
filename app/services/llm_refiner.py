@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Any
 
 import requests
@@ -10,6 +11,11 @@ from app.core.config import settings
 from app.services.learning_path import _normalize_steps
 
 logger = logging.getLogger(__name__)
+
+# Groq limits are shared by all students using the configured keys. Keep a
+# small process-local queue so a burst of first-time generations does not send
+# every student's request at the same instant.
+_LLM_REQUEST_LIMITER = threading.BoundedSemaphore(2)
 
 CERTIFICATE_CATALOG: list[dict[str, Any]] = [
     {
@@ -219,6 +225,8 @@ def _api_keys() -> list[str]:
     keys = [
         settings.llm_refiner_api_key,
         settings.llm_refiner_api_key_2,
+        settings.llm_refiner_api_key_3,
+        settings.llm_refiner_api_key_4,
     ]
     cleaned: list[str] = []
     for key in keys:
@@ -288,15 +296,16 @@ def _chat_completion(messages: list[dict[str, str]], max_tokens: int = 1400) -> 
     keys = _api_keys()
     for index, api_key in enumerate(keys, start=1):
         try:
-            response = requests.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=45,
-            )
+            with _LLM_REQUEST_LIMITER:
+                response = requests.post(
+                    f"{base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=45,
+                )
             response.raise_for_status()
             payload = response.json()
             message = payload["choices"][0]["message"]

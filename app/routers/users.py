@@ -1530,7 +1530,6 @@ def get_portfolio(username: str, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
     settings = db.query(PortfolioSettings).filter(PortfolioSettings.user_id == user.id).one_or_none()
     if not settings or not settings.is_public:
         raise HTTPException(status_code=404, detail="Portfolio not public")
@@ -1695,6 +1694,7 @@ def _invalidate_learning_path_caches(portfolio_settings: PortfolioSettings) -> N
     """Invalidate generated paths while preserving student progress evidence."""
     portfolio_settings.learning_path_baseline = []
     state = dict(portfolio_settings.project_learning_path_baseline or {})
+    state.pop("_certificate_suggestions", None)
     for key, value in list(state.items()):
         if str(key).startswith("_") or not isinstance(value, dict):
             continue
@@ -1939,7 +1939,9 @@ def get_learning_path(
             "skill_gaps": skill_gaps,
         }
 
-    if cached_steps and set(cached_signals_list) == set(signals):
+    # A saved path is authoritative until the student explicitly recomputes.
+    # Repository changes must not silently replace the student's generated path.
+    if cached_steps:
         steps = cached_steps
     else:
         try:
@@ -3815,43 +3817,40 @@ def get_project_learning_paths(
         repr((summaries, practice_dimensions, repo or "all", "v12-llm-grounded-task-proof-resource-generation")).encode("utf-8")
     ).hexdigest()
 
-    # Reuse repository paths when the repository/profile generation key is
-    # unchanged. This prevents every page refresh from calling FLAN-T5/Groq.
-    cached_projects: list[dict] = []
-    cache_is_complete = bool(summaries)
-    for summary in summaries:
-        cached_key = _project_baseline_key(
-            dict(portfolio_settings.project_learning_path_baseline or {}),
-            str(summary.get("name") or ""),
-        )
-        cached_entry = (portfolio_settings.project_learning_path_baseline or {}).get(cached_key)
-        cached_steps = cached_entry.get("steps") if isinstance(cached_entry, dict) else None
-        if (
-            not isinstance(cached_entry, dict)
-            or not isinstance(cached_steps, list)
-            or not cached_steps
-            or str(cached_entry.get("generation_key") or "") != generation_key
-        ):
-            cache_is_complete = False
-            break
-        cached_projects.append({"repo_name": summary.get("name"), "steps": cached_steps})
-
-    if cache_is_complete:
-        projects = cached_projects
-    else:
-        projects = infer_project_learning_paths(
-            summaries,
-            detected_skills=detected_skills,
-            project_keywords=project_keywords,
-            practice_dimensions=practice_dimensions,
-            personalization_key=username,
-        )
-    if not projects:
-        raise HTTPException(
-            status_code=503,
-            detail="AI learning-path generation is temporarily unavailable. Please try again.",
-        )
     project_baseline = dict(portfolio_settings.project_learning_path_baseline or {})
+    cached_projects: list[dict] = []
+    for repo in summaries:
+        repo_name = str(repo.get("name") or "Unnamed repo")
+        cached_entry = project_baseline.get(_project_baseline_key(project_baseline, repo_name))
+        if isinstance(cached_entry, dict) and isinstance(cached_entry.get("steps"), list) and cached_entry.get("steps"):
+            cached_projects.append({"repo_name": repo_name, "steps": cached_entry["steps"]})
+
+    # Use the student's saved paths on ordinary GETs. Re-generation is done by
+    # the explicit recompute flow, which invalidates these entries.
+    projects = cached_projects or infer_project_learning_paths(
+        summaries,
+        detected_skills=detected_skills,
+        project_keywords=project_keywords,
+        practice_dimensions=practice_dimensions,
+        personalization_key=username,
+    )
+    if not projects and isinstance(project_baseline, dict):
+        cached_projects: list[dict] = []
+        for repo_name, baseline_entry in project_baseline.items():
+            if not isinstance(baseline_entry, dict):
+                continue
+            cached_steps = baseline_entry.get("steps")
+            if not isinstance(cached_steps, list) or not cached_steps:
+                continue
+            cached_projects.append(
+                {
+                    "repo_name": str(repo_name or "Unnamed repo"),
+                    "steps": cached_steps,
+                    "progress_percent": 0,
+                }
+            )
+        if cached_projects:
+            projects = cached_projects
 
     projects_with_progress = []
 
@@ -3916,11 +3915,7 @@ def get_project_learning_paths(
             steps = [{**step, "status": "done"} for step in (cached_steps or project.get("steps") or [])]
             progress_percent = 100 if steps else 0
         else:
-            if (
-                cached_steps
-                and set(cached_signals_list) == set(repo_signals)
-                and str(baseline_entry.get("generation_key") or "") == generation_key
-            ):
+            if cached_steps:
                 steps_source = cached_steps
             else:
                 steps_source = project.get("steps") or []
@@ -4039,12 +4034,9 @@ def get_certificate_suggestions(
         if isinstance(learning_cache, dict)
         else ""
     )
-    if (
-        cached_certificate_key == certificate_generation_key
-        and isinstance(cached_certificate_items, list)
-    ):
+    if isinstance(cached_certificate_items, list):
         # Certificate recommendations are already generated for this exact
-        # repository/profile state; do not spend FLAN/Groq tokens again.
+        # student; do not spend FLAN/Groq tokens again until manual recompute.
         items = [dict(item) for item in cached_certificate_items if isinstance(item, dict)]
     else:
         learning_steps = infer_learning_path(
@@ -4052,12 +4044,14 @@ def get_certificate_suggestions(
             detected_skills=detected_skills,
             project_keywords=project_keywords,
             practice_dimensions=practice_dimensions,
+            personalization_key=username,
         )
         project_paths = infer_project_learning_paths(
             summaries,
             detected_skills=detected_skills,
             project_keywords=project_keywords,
             practice_dimensions=practice_dimensions,
+            personalization_key=username,
         )
         items = llm_refiner.generate_certificate_suggestions(
             learning_path_steps=learning_steps,

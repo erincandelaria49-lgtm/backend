@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     llm_refiner_provider: str = "groq"
     llm_refiner_api_key: str | None = None
     llm_refiner_api_key_2: str | None = None
+    llm_refiner_api_key_3: str | None = None
+    llm_refiner_api_key_4: str | None = None
     llm_refiner_base_url: str = "https://api.groq.com/openai/v1"
     llm_refiner_model: str = "llama-3.1-8b-instant"
     admin_usernames: str | None = None
