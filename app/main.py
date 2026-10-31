@@ -141,17 +141,19 @@ app.include_router(login_analytics.router)
 
 @app.on_event("startup")
 def startup_event():
-    logger.info("LLM refiner runtime configuration: %s", llm_refiner.diagnostics())
-    logger.info(
-        "FLAN-T5 runtime configuration: %s",
-        {
-            "model_configured": bool(settings.flan_t5_model),
-            "model": settings.flan_t5_model or "",
-            "hf_space_configured": bool(settings.hf_space_url),
-            "hf_token_configured": bool(settings.hf_token),
-            "hf_endpoint": settings.hf_endpoint_url,
-        },
-    )
+    llm_config = llm_refiner.diagnostics()
+    flan_config = {
+        "model_configured": bool(settings.flan_t5_model),
+        "model": settings.flan_t5_model or "",
+        "hf_space_configured": bool(settings.hf_space_url),
+        "hf_token_configured": bool(settings.hf_token),
+        "hf_endpoint": settings.hf_endpoint_url,
+    }
+    # Render must show these safe diagnostics even when INFO logs are filtered.
+    logger.warning("AI runtime Groq configuration: %s", llm_config)
+    logger.warning("AI runtime FLAN-T5 configuration: %s", flan_config)
+    print(f"AI_RUNTIME_GROQ={llm_config}", flush=True)
+    print(f"AI_RUNTIME_FLAN_T5={flan_config}", flush=True)
     Thread(target=_bootstrap_schema_background, daemon=True).start()
     Thread(target=_repair_badges_background, daemon=True).start()
     if settings.flan_t5_model and _should_warmup_flan_t5():
